@@ -16,6 +16,10 @@
 7. [Demo Script — What to Show Judges](#7-demo-script--what-to-show-judges)
 8. [System Numbers to Know Cold](#8-system-numbers-to-know-cold)
 9. [Troubleshooting — Most Likely Failures](#9-troubleshooting--most-likely-failures)
+10. [GX10 Remote Access — SSH + Tailscale](#10-gx10-remote-access--ssh--tailscale)
+7. [Demo Script — What to Show Judges](#7-demo-script--what-to-show-judges)
+8. [System Numbers to Know Cold](#8-system-numbers-to-know-cold)
+9. [Troubleshooting — Most Likely Failures](#9-troubleshooting--most-likely-failures)
 
 ---
 
@@ -223,7 +227,17 @@ Expected: JSON with `compile_method: "regex"`, `itinerary` with shelter + food s
 
 ## 4. Setup Guide — GX10 Grace Blackwell
 
-**Do these in parallel. Some steps take 30-60 minutes.**
+> **The GX10 has no Wi-Fi.** You must SSH into it over a mobile hotspot before doing anything else. See [Section 10](#10-gx10-remote-access--ssh--tailscale) for full SSH + Tailscale details.
+
+**Quick SSH** (do this first, before any other step):
+```bash
+# Enable mobile hotspot on your phone or laptop
+# Then from Terminal / PowerShell Admin:
+ssh asus@gx10-XXXX.local   # XXXX = last 4 chars of MAC1 sticker under the unit
+# password: password
+```
+
+**Do these in parallel once SSH'd in. Some steps take 30-60 minutes.**
 
 ### Immediate on arrival (all in parallel)
 
@@ -645,4 +659,141 @@ lsof -ti :8000 | xargs kill -9
 
 ---
 
-*Last updated: May 30, 2026 — reflects built state of the repo (all 7 phases complete)*
+## 10. GX10 Remote Access — SSH + Tailscale
+
+> The GX10 has **no built-in Wi-Fi**. All remote access goes through mobile hotspot → SSH, then optionally Tailscale for persistent access across any network.
+
+---
+
+### Method A — SSH via Mobile Hotspot (fastest, same-network only)
+
+**Step 1 — Enable your hotspot**
+
+Turn on mobile hotspot on your phone **or** on your laptop (either works). The GX10 will auto-connect — the hotspot profile is pre-saved on the unit.
+
+**Step 2 — Find your unit's SSH name**
+
+Look at the pamphlet in the box:
+- SSH name format: `gx10-XXXX` where XXXX is unique per unit
+
+**No pamphlet?** Flip the unit upside down → find the sticker labelled `MAC1` → use the **last 4 characters** of that address.
+
+Example: MAC1 = `AA:BB:CC:DD:3H:D6` → SSH name = `gx10-3hd6`
+
+**Step 3 — SSH in**
+
+Open Terminal (Mac/Linux) or PowerShell as Administrator (Windows):
+
+```bash
+ssh asus@gx10-XXXX.local
+# Replace XXXX with your unit's 4-character ID
+# Example: ssh asus@gx10-3hd6.local
+```
+
+When prompted:
+1. Type `yes` → press Enter (accepts the host key fingerprint)
+2. Password: `password` → press Enter
+
+You'll see the GX10 shell prompt when it works.
+
+**Credentials summary:**
+| Field | Value |
+|-------|-------|
+| Username | `asus` |
+| Password | `password` |
+| Hostname | `gx10-XXXX.local` |
+| SSH System Name | `asus@gx10-XXXX` |
+
+---
+
+### Method B — Tailscale (persistent, works across any network)
+
+Use this after initial SSH setup so you can access the GX10 without being on the same hotspot.
+
+**Step 1 — Install Tailscale on your laptop**
+
+Download: https://tailscale.com/download
+
+- **Do NOT use a `.edu` email** — institutional emails block Tailscale registration
+- Use a personal Gmail, Outlook, or GitHub login
+
+**Mac setup:**
+- Allow all configuration prompts during install
+- After install, a Tailscale icon appears in the menu bar — click it and make sure it's **enabled**
+- If icon isn't visible: remove some menu bar icons and it will appear
+
+**Windows setup:**
+- Tailscale icon lives in the **hidden system tray** (bottom-right, click the ^ arrow)
+- Right-click the icon → Connect
+
+**Step 2 — Pair the GX10 to your Tailscale account**
+
+SSH into the GX10 first (Method A above), then run:
+
+```bash
+sudo tailscale up
+```
+
+This prints a URL. Copy it → paste in your laptop's browser → authorize.
+
+The GX10 is now in your Tailscale network.
+
+**Step 3 — SSH via Tailscale from anywhere**
+
+```bash
+# By hostname:
+ssh asus@gx10-XXXX
+
+# By Tailscale IP (starts with 100.):
+ssh asus@100.X.X.X
+# Find the IP in your Tailscale app under "Machines"
+```
+
+---
+
+### Inviting teammates to your Tailscale network
+
+So others can SSH in without needing the same hotspot:
+
+1. Open the **Tailscale admin console** (tailscale.com → Admin Console)
+2. Click **Invite users** → **Invite by email**
+3. Teammate receives an email → installs Tailscale → prompted to join two tailnets → **choose your (the host's) email**
+4. Teammate can now SSH using: `ssh asus@gx10-XXXX` or `ssh asus@100.X.X.X`
+
+---
+
+### Removing the mobile hotspot (after switching to venue Wi-Fi)
+
+The hotspot profile is persistent — the GX10 will keep reconnecting to it on every reboot. To delete it after pairing with Wi-Fi:
+
+```bash
+nmcli con show                         # lists all saved connections
+nmcli con delete gx10-XXXX-Hotspot    # replace XXXX with your unit's ID
+```
+
+This is permanent. After deletion, the GX10 will only connect to saved Wi-Fi networks.
+
+---
+
+### Quick reference card
+
+```
+INITIAL ACCESS:
+  Enable hotspot → ssh asus@gx10-XXXX.local → yes → password
+
+TAILSCALE SETUP (once):
+  SSH in → sudo tailscale up → authorize URL in browser
+
+DAILY REMOTE ACCESS (after Tailscale):
+  ssh asus@gx10-XXXX  (or ssh asus@100.X.X.X)
+
+INVITE TEAMMATE:
+  Tailscale admin → Invite by email → teammate joins your tailnet
+
+DELETE HOTSPOT (cleanup):
+  nmcli con delete gx10-XXXX-Hotspot
+```
+
+---
+
+*Last updated: May 30, 2026 — added GX10 remote access (SSH + Tailscale); fixed briefing endpoint bug*

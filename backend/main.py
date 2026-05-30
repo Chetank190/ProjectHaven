@@ -217,6 +217,7 @@ async def caseworker_briefing(req: BriefingRequest):
     if shelters is None:
         raise HTTPException(status_code=503, detail="Shelter data not loaded")
 
+    total, available, by_sector = 0, 0, {}
     try:
         pdf = shelters.to_pandas() if hasattr(shelters, "to_pandas") else shelters
         total     = int(pdf["CAPACITY_ACTUAL_BED"].sum())
@@ -237,10 +238,7 @@ async def caseworker_briefing(req: BriefingRequest):
     briefing = generate_briefing(summary)
     return {
         "briefing_text":   briefing,
-        "shelter_snapshot": {
-            "total_beds":    total if "total" in dir() else 0,
-            "available_beds": available if "available" in dir() else 0,
-        },
+        "shelter_snapshot": {"total_beds": total, "available_beds": available},
     }
 
 

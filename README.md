@@ -46,10 +46,70 @@ cd frontend && npm install && npm run dev
 
 ---
 
-## GX10 Setup (NVIDIA Grace Blackwell)
+## Connecting to the GX10 (No Wi-Fi — SSH Required)
+
+The GX10 has **no Wi-Fi**. Connect via your **mobile hotspot** then SSH in.
+
+### Step 1 — SSH over mobile hotspot
+
+Enable your phone/laptop hotspot. The GX10 auto-connects to it.
+
+Open Terminal (Mac/Linux) or PowerShell as Admin (Windows):
 
 ```bash
-# Step 1 — Verify hardware
+ssh asus@gx10-XXXX.local
+# Replace XXXX with the last 4 chars of the MAC1 sticker under the unit
+# Example: ssh asus@gx10-3hd6.local
+```
+
+When prompted:
+- Type `yes` and press Enter
+- Password: `password`
+
+**No pamphlet?** Flip the unit over → look at the `MAC1` label → use the last 4 characters.
+
+---
+
+### Step 2 — Set up Tailscale (for persistent access across any network)
+
+Install Tailscale on your laptop first: **https://tailscale.com/download**
+- Do NOT use a `.edu` email — it blocks registration
+- Mac: allow all prompts, enable from the taskbar icon
+- Windows: enable from the hidden icon tray (right-click)
+
+Then on the GX10 terminal:
+
+```bash
+sudo tailscale up
+# Copy the URL it prints → open in your laptop browser → authorize
+```
+
+After pairing, SSH via Tailscale from anywhere:
+
+```bash
+ssh asus@gx10-XXXX          # by hostname
+ssh asus@100.X.X.X          # by Tailscale IP (shown in Tailscale app)
+```
+
+**Invite teammates to your tailnet:**
+1. Tailscale admin console → **Invite by email**
+2. Teammate installs Tailscale → joins with your host email → can then SSH in
+
+---
+
+### Step 3 — Remove mobile hotspot (optional, after switching to venue Wi-Fi)
+
+```bash
+nmcli con show                        # list all connections
+nmcli con delete gx10-XXXX-Hotspot   # delete so it doesn't reconnect on reboot
+```
+
+---
+
+## GX10 Software Setup (NVIDIA Grace Blackwell)
+
+```bash
+# Step 1 — Verify hardware (run after SSH in)
 nvidia-smi && uname -m   # must show GB10 and aarch64
 
 # Step 2 — Pull RAPIDS container (start at check-in — large image)
