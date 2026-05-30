@@ -12,6 +12,9 @@ dist/
 .venv/
 venv/
 
+# Logs
+logs/
+
 # Claude Code
 CLAUDE.md
 .claude/

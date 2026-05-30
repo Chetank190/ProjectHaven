@@ -4,10 +4,13 @@ Constraint-aware cuML KNN solver. Eligibility fields filter datasets before spat
 Run: python backend/solver.py --benchmark
 """
 
+import logging
 import time
 import argparse
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -36,6 +39,10 @@ def solve(
 
     t0 = time.perf_counter()
     masked = _apply_masks(payload, datasets, pd_engine)
+    logger.info(
+        f"solve start mode={mode.value} origin={origin} "
+        f"pillars={list(masked.keys())}"
+    )
     origin_arr = np_engine.array([[origin[0], origin[1]]], dtype="float32")
     itinerary = {}
 
@@ -55,7 +62,12 @@ def solve(
         results = _score_and_rank(df, indices, distances_km, datasets["stops"], pillar_name)
         itinerary[pillar_name] = results[:KNN_RESULTS_PER_PILLAR]
 
-    return itinerary, (time.perf_counter() - t0) * 1000
+    elapsed = (time.perf_counter() - t0) * 1000
+    logger.info(
+        f"solve done {elapsed:.1f}ms "
+        f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary.items())}"
+    )
+    return itinerary, elapsed
 
 
 def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:

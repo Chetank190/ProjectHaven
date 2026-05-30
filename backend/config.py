@@ -15,6 +15,7 @@ class EngineMode(Enum):
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_DIR       = Path("data")
+LOG_DIR        = Path("logs")
 SHELTERS_CSV   = DATA_DIR / "shelters.csv"
 REHAB_CSV      = DATA_DIR / "rehab_services.csv"
 FOOD_CSV       = DATA_DIR / "food_banks.csv"

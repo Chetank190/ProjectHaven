@@ -5,18 +5,24 @@ Launch: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import asyncio
+import logging
+import logging.handlers
 import os
 import sys
+import time
+import uuid
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from config import EngineMode, KIOSK_HUBS, NIM_ENDPOINT
+from config import EngineMode, KIOSK_HUBS, LOG_DIR, NIM_ENDPOINT
 from data_ingestion import load_all
 from nim_compiler import (
     NeedsPayload,
@@ -37,6 +43,31 @@ from voice_session import (
     _cleanup_expired,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _setup_logging():
+    """Configure root logger: timestamped daily file + console."""
+    LOG_DIR.mkdir(exist_ok=True)
+    fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)-14s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    fh = logging.handlers.TimedRotatingFileHandler(
+        LOG_DIR / f"haven_{date.today()}.log",
+        when="midnight", backupCount=7, encoding="utf-8",
+    )
+    fh.setFormatter(fmt)
+    fh.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setFormatter(fmt)
+    ch.setLevel(logging.INFO)
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(fh)
+    root.addHandler(ch)
+
+
 # ── Global state ──────────────────────────────────────────────────────────────
 datasets_gpu: dict = {}
 datasets_cpu: dict = {}
@@ -48,18 +79,19 @@ _rapids_mode: str = "cpu"
 async def lifespan(app: FastAPI):
     global datasets_gpu, datasets_cpu, _rapids_mode
 
-    # Try GPU path first; fall back to CPU if RAPIDS unavailable (e.g. MacBook dev)
+    _setup_logging()
+
     try:
         datasets_gpu, _ = load_all(EngineMode.GPU)
         _rapids_mode = "gpu"
-        print("[RAPIDS] GPU datasets loaded into unified memory.")
+        logger.info("[RAPIDS] GPU datasets loaded into unified memory.")
     except Exception as e:
-        print(f"[WARN] GPU load failed ({e}). Running both paths on CPU.")
+        logger.warning(f"GPU load failed ({e}). Running both paths on CPU.")
         datasets_gpu, _ = load_all(EngineMode.CPU)
         _rapids_mode = "cpu"
 
     datasets_cpu, _ = load_all(EngineMode.CPU)
-    print(f"[READY] rapids_mode={_rapids_mode}")
+    logger.info(f"[READY] rapids_mode={_rapids_mode}")
 
     async def _session_gc():
         while True:
@@ -69,6 +101,19 @@ async def lifespan(app: FastAPI):
     gc_task = asyncio.create_task(_session_gc())
     yield
     gc_task.cancel()
+
+
+# ── Request correlation middleware ────────────────────────────────────────────
+class _ReqLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        rid = uuid.uuid4().hex[:6]
+        request.state.rid = rid
+        logger.info(f"[{rid}] → {request.method} {request.url.path}")
+        t0 = time.perf_counter()
+        response = await call_next(request)
+        ms = (time.perf_counter() - t0) * 1000
+        logger.info(f"[{rid}] ← {response.status_code} in {ms:.1f}ms")
+        return response
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -89,6 +134,7 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+app.add_middleware(_ReqLogMiddleware)
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -144,27 +190,40 @@ async def benchmark():
 
 
 @app.post("/api/v1/caseworker/route")
-async def caseworker_route(req: CaseworkerRouteRequest):
+async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
+    rid = getattr(request.state, "rid", "?")
+
     try:
         cleaned = clean_transcript(req.text)
     except ValueError as e:
+        logger.warning(f"[{rid}] transcript rejected: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+    logger.debug(f"[{rid}] transcript: {cleaned[:120]!r}")
     payload, method, nim_ms = compile_needs(cleaned)
+    logger.info(f"[{rid}] compile method={method} latency={nim_ms:.0f}ms")
+    logger.info(f"[{rid}] payload {payload.model_dump()}")
+
     origin = (req.origin_lat, req.origin_lon)
-
-    # GPU solve (uses GPU datasets — may be CPU-backed on dev machines)
     gpu_mode = EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU
-    itinerary_gpu, gpu_ms = solve(payload, datasets_gpu, origin, gpu_mode)
 
-    # CPU benchmark in executor to avoid blocking the event loop
+    try:
+        itinerary_gpu, gpu_ms = solve(payload, datasets_gpu, origin, gpu_mode)
+        logger.info(
+            f"[{rid}] gpu solve {gpu_ms:.1f}ms "
+            f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary_gpu.items())}"
+        )
+    except Exception as e:
+        logger.error(f"[{rid}] GPU solve failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Routing engine error — please try again")
+
     loop = asyncio.get_event_loop()
     try:
         itinerary_cpu, cpu_ms = await loop.run_in_executor(
             None, solve, payload, datasets_cpu, origin, EngineMode.CPU
         )
     except Exception as e:
-        print(f"[WARN] CPU benchmark failed: {e}")
+        logger.warning(f"[{rid}] CPU benchmark failed: {e}")
         cpu_ms = None
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
 
@@ -182,15 +241,23 @@ async def caseworker_route(req: CaseworkerRouteRequest):
 
 
 @app.post("/api/v1/kiosk/session")
-async def kiosk_session(req: KioskSessionRequest):
+async def kiosk_session(req: KioskSessionRequest, request: Request):
+    rid = getattr(request.state, "rid", "?")
+
     try:
         cleaned = clean_transcript(req.transcript)
     except ValueError as e:
+        logger.warning(f"[{rid}] kiosk transcript rejected: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-    payload, _, _ = compile_needs(cleaned)
+    logger.debug(f"[{rid}] kiosk transcript: {cleaned[:120]!r}")
+    payload, method, nim_ms = compile_needs(cleaned)
+    logger.info(f"[{rid}] kiosk compile method={method} latency={nim_ms:.0f}ms")
+    logger.info(f"[{rid}] kiosk payload {payload.model_dump()}")
+
     session = create_session(payload, (req.origin_lat, req.origin_lon))
     questions = resolve_eligibility_questions(payload)
+    logger.info(f"[{rid}] session={session.session_id} questions={len(questions)}")
 
     return {
         "session_id":            session.session_id,
@@ -201,17 +268,31 @@ async def kiosk_session(req: KioskSessionRequest):
 
 
 @app.post("/api/v1/kiosk/route")
-async def kiosk_route(req: KioskRouteRequest):
+async def kiosk_route(req: KioskRouteRequest, request: Request):
+    rid = getattr(request.state, "rid", "?")
+    logger.info(f"[{rid}] kiosk route session={req.session_id} answers={req.eligibility_answers}")
+
     session = get_session(req.session_id)
     if not session or session.payload_draft is None:
+        logger.warning(f"[{rid}] session not found or expired: {req.session_id}")
         raise HTTPException(status_code=404, detail="Session expired or not found")
 
     draft = session.payload_draft.model_dump()
     draft.update({k: v for k, v in req.eligibility_answers.items() if v is not None})
     payload = NeedsPayload(**draft)
+    logger.info(f"[{rid}] kiosk merged payload {payload.model_dump()}")
 
     gpu_mode = EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU
-    itinerary, gpu_ms = solve(payload, datasets_gpu, session.origin, gpu_mode)
+
+    try:
+        itinerary, gpu_ms = solve(payload, datasets_gpu, session.origin, gpu_mode)
+        logger.info(
+            f"[{rid}] kiosk solve {gpu_ms:.1f}ms "
+            f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary.items())}"
+        )
+    except Exception as e:
+        logger.error(f"[{rid}] kiosk solve failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Routing engine error — please try again")
 
     loop = asyncio.get_event_loop()
     try:
@@ -219,7 +300,7 @@ async def kiosk_route(req: KioskRouteRequest):
             None, solve, payload, datasets_cpu, session.origin, EngineMode.CPU
         )
     except Exception as e:
-        print(f"[WARN] CPU benchmark failed: {e}")
+        logger.warning(f"[{rid}] kiosk CPU benchmark failed: {e}")
         cpu_ms = None
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
 
@@ -231,7 +312,8 @@ async def kiosk_route(req: KioskRouteRequest):
 
 
 @app.post("/api/v1/caseworker/briefing")
-async def caseworker_briefing(req: BriefingRequest):
+async def caseworker_briefing(req: BriefingRequest, request: Request):
+    rid = getattr(request.state, "rid", "?")
     shelters = datasets_gpu.get("shelters")
     if shelters is None:
         raise HTTPException(status_code=503, detail="Shelter data not loaded")
@@ -251,18 +333,22 @@ async def caseworker_briefing(req: BriefingRequest):
             f"Total beds: {total}. Available: {available}. "
             f"By sector: {by_sector}. Current time: {req.current_time_iso}."
         )
+        logger.info(f"[{rid}] briefing total={total} available={available}")
     except Exception as e:
+        logger.error(f"[{rid}] briefing data error: {e}", exc_info=True)
         summary = f"Shelter data summary unavailable: {e}"
 
     briefing = generate_briefing(summary)
     return {
-        "briefing_text":   briefing,
+        "briefing_text":    briefing,
         "shelter_snapshot": {"total_beds": total, "available_beds": available},
     }
 
 
 @app.post("/api/v1/handoff-script")
-async def handoff_script(req: HandoffRequest):
+async def handoff_script(req: HandoffRequest, request: Request):
+    rid = getattr(request.state, "rid", "?")
+    logger.info(f"[{rid}] handoff facility={req.facility_name!r}")
     script = generate_handoff_script(req.facility_name, req.payload)
     return {
         "script":   script,

@@ -14,8 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import logging
+
 from openai import OpenAI
 from pydantic import BaseModel, field_validator
+
+logger = logging.getLogger(__name__)
 from config import (
     NVIDIA_CLOUD_ENDPOINT, NVIDIA_CLOUD_MODEL,
     NIM_ENDPOINT, NEMOTRON_MODEL,
@@ -61,6 +65,7 @@ def _nim_tiers() -> list[tuple[str, str, str]]:
         tiers.append((NVIDIA_CLOUD_ENDPOINT, NVIDIA_CLOUD_MODEL, ngc_key))
     tiers.append((NIM_ENDPOINT, NEMOTRON_MODEL, nim_key))
     tiers.append((NIM_FALLBACK, NIM_MODEL,      nim_key))
+    logger.debug(f"NIM tiers: {[(ep, m) for ep, m, _ in tiers]}")
     return tiers
 
 
@@ -73,10 +78,13 @@ def compile_needs(text: str) -> tuple[NeedsPayload, str, float]:
             try:
                 raw = _call_nim(text, endpoint, NIM_TRIAGE_PROMPT, model=model, api_key=api_key)
                 payload = NeedsPayload(**raw)
-                return payload, "nim", (time.perf_counter() - t0) * 1000
+                ms = (time.perf_counter() - t0) * 1000
+                logger.info(f"NIM triage OK endpoint={endpoint} model={model} latency={ms:.0f}ms")
+                return payload, "nim", ms
             except Exception as e:
-                print(f"[NIM triage] attempt {attempt + 1} at {endpoint}: {e}")
+                logger.warning(f"NIM triage attempt {attempt + 1} failed at {endpoint}: {e}")
 
+    logger.warning("NIM triage all tiers failed — using regex fallback")
     return _regex_fallback(text), "regex", (time.perf_counter() - t0) * 1000
 
 
@@ -97,8 +105,9 @@ def generate_briefing(shelter_summary: str) -> str:
             )
             return resp.choices[0].message.content.strip()
         except Exception as e:
-            print(f"[NIM briefing] {endpoint}: {e}")
+            logger.warning(f"NIM briefing failed at {endpoint}: {e}")
 
+    logger.warning("NIM briefing all tiers failed — returning placeholder")
     return "Briefing unavailable — check shelter data manually."
 
 
@@ -128,8 +137,9 @@ def generate_handoff_script(facility_name: str, payload: NeedsPayload) -> str:
             )
             return resp.choices[0].message.content.strip()
         except Exception as e:
-            print(f"[NIM handoff] {endpoint}: {e}")
+            logger.warning(f"NIM handoff failed at {endpoint}: {e}")
 
+    logger.warning("NIM handoff all tiers failed — returning placeholder")
     return "Script unavailable — compose the call manually using the client's needs above."
 
 

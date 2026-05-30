@@ -4,11 +4,14 @@ Zero-copy RAPIDS ingestion (GPU) with pandas fallback (CPU).
 Run: python backend/data_ingestion.py --verify [--mode gpu|cpu]
 """
 
+import logging
 import time
 import json
 import argparse
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Allow running from repo root
 sys.path.insert(0, str(Path(__file__).parent))
@@ -71,11 +74,8 @@ def load_all(mode: EngineMode = EngineMode.GPU) -> tuple[dict, float]:
     ).rename(columns={"stop_lat": "lat", "stop_lon": "lon"})
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
-    print(
-        f"[{mode.value.upper()}] Loaded "
-        f"{sum(len(d) for d in datasets.values())} total records "
-        f"in {elapsed_ms:.2f} ms"
-    )
+    total = sum(len(d) for d in datasets.values())
+    logger.info(f"[{mode.value.upper()}] loaded {total} records in {elapsed_ms:.0f}ms")
     return datasets, elapsed_ms
 
 
@@ -106,7 +106,7 @@ def _fetch_shelters_ckan(pd_engine):
             return pd_engine.from_pandas(ckan_df) if hasattr(pd_engine, "from_pandas") else ckan_df
 
         # CKAN has no coordinates — use our local pre-processed file
-        print("[INFO] CKAN has no coordinates — using local shelters.csv with cached coordinates")
+        logger.info("CKAN has no coordinates — using local shelters.csv with cached coordinates")
         if not SHELTERS_CSV.exists():
             raise FileNotFoundError("No local shelters.csv to fall back to")
 
@@ -114,7 +114,7 @@ def _fetch_shelters_ckan(pd_engine):
         return pd_engine.from_pandas(local_df) if hasattr(pd_engine, "from_pandas") else local_df
 
     except Exception as e:
-        print(f"[WARN] CKAN fetch/merge failed ({e}), using cache")
+        logger.warning(f"CKAN fetch/merge failed ({e}), using local cache")
         return None
 
 
@@ -126,7 +126,7 @@ def _load_osm(pd_engine):
         with open(OSM_JSON) as f:
             raw = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[WARN] OSM JSON load failed ({e}), using empty list")
+        logger.warning(f"OSM JSON load failed ({e}), using empty dataset")
         raw = {"elements": []}
 
     rows = []
