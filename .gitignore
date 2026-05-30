@@ -2,6 +2,8 @@
 .env.local
 *.gguf
 nim-cache/
+asr-cache/
+pip-cache/
 __pycache__/
 *.pyc
 *.pyo
@@ -15,6 +17,16 @@ venv/
 
 # Logs
 logs/
+
+# Runtime-generated data (not source)
+data/daily_telemetry.csv
+
+# Audio test files (created during ASR/voice testing)
+*.wav
+*.webm
+*.mp3
+*.ogg
+*.flac
 
 # Claude Code
 CLAUDE.md

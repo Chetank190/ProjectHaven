@@ -1,8 +1,8 @@
 # Haven Matrix — Implementation Reference & LLM Handoff
 
-> **Last updated:** 2026-05-30
-> **Last commit:** `c437d2a` + NVIDIA NIM integration
-> **Status:** Fully functional in CPU/regex mode (local dev). Cloud NIM active when NGC_API_KEY set. GPU path requires RAPIDS container on GX10.
+> **Last updated:** 2026-05-30 (Session 5 — NeMo Guardrails + ASR NIM + PII + Voice UX)
+> **Last commit:** `c437d2a` + all sessions below
+> **Status:** Fully functional in CPU/regex mode (local dev). Cloud NIM active when NGC_API_KEY set. GPU path requires RAPIDS container on GX10. ASR NIM optional (port 9000). NeMo Guardrails optional (GUARDRAILS_ENABLED=1).
 
 This document is the authoritative source for continuing work on Haven Matrix. It covers the full current state of every module, recent changes, known remaining issues, and how to extend the system.
 
@@ -39,11 +39,20 @@ This document is the authoritative source for continuing work on Haven Matrix. I
 |              FastAPI BACKEND  (port 8000)                    |
 |  POST /api/v1/caseworker/route                              |
 |  POST /api/v1/kiosk/session + /kiosk/route                  |
+|  POST /api/v1/transcribe  (audio → ASR NIM)                 |
 |  POST /api/v1/caseworker/briefing                           |
 |  POST /api/v1/handoff-script                                |
 |  GET  /api/v1/benchmark  |  GET /api/v1/health              |
 +-------------------------------------------------------------+
-                         |
+          |                            |
++---------------------+   +--------------------------+
+|  SAFETY LAYER       |   |  ASR INFERENCE (port 9000)|
+|  pii_scrubber.py    |   |  Parakeet-0.6B-CTC NIM   |
+|  NeMo Guardrails    |   |  (optional; Web Speech    |
+|  (GUARDRAILS_       |   |   API fallback in browser)|
+|   ENABLED=1)        |   +--------------------------+
++---------------------+
+          |
 +-------------------------------------------------------------+
 |     LLM INFERENCE (4-tier chain)                            |
 |     cloud NIM → llama.cpp :30000 → NIM container :8001      |
@@ -65,12 +74,15 @@ This document is the authoritative source for continuing work on Haven Matrix. I
 |-------|------|-----|
 | LLM | Nemotron-30B via llama.cpp | Fits in 128 GB unified memory; deterministic JSON output |
 | LLM fallback | Gemma 3n E4B via NIM container (:8001) | NVFP4 on Blackwell; same OpenAI API |
+| ASR | Parakeet-0.6B-CTC via NIM (:9000) | NVIDIA speech recognition; ~3 GB; Web Speech API fallback |
+| Guardrails | NeMo Guardrails + `pii_scrubber.py` | Pattern-matching rails (jailbreak, harmful); Canadian PII redaction |
 | Backend | FastAPI + uvicorn | Async; Pydantic validation; auto Swagger at /docs |
 | GPU compute | cuDF + cuML (RAPIDS) | Zero-copy data; KNN in < 10ms vs ~400ms pandas |
 | CPU fallback | pandas + scikit-learn | Identical API; automatically used on MacBook dev |
-| Frontend | React + Vite + TypeScript | Fast; Web Speech API for voice (no cloud STT) |
-| Voice | Web Speech API (browser-native) | No audio ever leaves device |
-| Deployment | Docker Compose (GX10) | nvidia runtime; RAPIDS container |
+| Frontend | React + Vite + TypeScript | Fast; dual-recording (MediaRecorder + Web Speech) |
+| Voice input | MediaRecorder → Parakeet ASR NIM | GPU ASR; falls back to Web Speech API if NIM offline |
+| Voice output | speechSynthesis (browser) | pitch=0.85, preferred voice (Google UK English Female) |
+| Deployment | Docker Compose (GX10) | nvidia runtime; nim + asr services |
 
 ---
 
@@ -141,7 +153,16 @@ KIOSK_HUBS = {
 KIOSK_DEFAULT_HUB = os.environ.get("VITE_KIOSK_HUB", "Union Station")
 ```
 
-**System prompts:** `NIM_TRIAGE_PROMPT` (strict JSON schema), `NIM_BRIEFING_PROMPT` (3-5 sentences), `NIM_HANDOFF_PROMPT` (4-6 sentence phone script)
+**ASR NIM constants (new):**
+```python
+ASR_NIM_URL     = os.environ.get("ASR_NIM_URL",   "http://localhost:9000")
+ASR_CLOUD_URL   = os.environ.get("ASR_CLOUD_URL", "https://integrate.api.nvidia.com/v1")
+ASR_NIM_TIMEOUT = 30
+```
+
+**System prompts:** `NIM_TRIAGE_PROMPT` (strict JSON schema + PRIVACY RULE block), `NIM_BRIEFING_PROMPT` (3-5 sentences), `NIM_HANDOFF_PROMPT` (4-6 sentence phone script)
+
+**`NIM_TRIAGE_PROMPT` privacy rule (added):** Opens with a block instructing the model to ignore personal identifiers (names, addresses, health conditions) even after PII scrubbing — defence in depth.
 
 ---
 
@@ -306,9 +327,48 @@ origin:              tuple(lat, lon) | None
 | `get_session(session_id)` | Runs _cleanup_expired(), returns session or None |
 | `resolve_eligibility_questions(payload)` | Returns up to 3 TTS-ready question strings |
 | `parse_eligibility_answer(question, answer)` | Keyword -> {field: value} — imported but NOT called by main.py; frontend mirrors this logic |
-| `clean_transcript(raw)` | Removes fillers, validates >= 10 chars, raises ValueError if too short |
-| `build_tts_itinerary_script(itinerary, client_name)` | Converts itinerary to spoken script; uses .get() for name/address |
+| `clean_transcript(raw)` | Removes fillers, validates >= 10 chars, calls `redact_pii()`, raises ValueError if too short |
+| `build_tts_itinerary_script(itinerary, client_name)` | Warm spoken script: "First, go to…", "Next…", "I hope this helps." |
 | `_cleanup_expired()` | Removes sessions older than VOICE_SESSION_IDLE_SEC |
+
+---
+
+### `backend/pii_scrubber.py` — PII Redaction + Injection Detection (new)
+
+Two public functions, no external dependencies beyond `re`.
+
+**`redact_pii(text: str) -> tuple[str, int, list[str]]`**
+
+Regex patterns for Canadian PII:
+
+| Pattern | What it catches |
+|---------|----------------|
+| `phone` | North American phone numbers (various formats) |
+| `email` | Email addresses |
+| `sin` | Social Insurance Numbers (3-3-3 digit format) |
+| `health_card` | Ontario OHIP numbers (4-3-3 format + version code) |
+| `postal_code` | Canadian postal codes (A1A 1A1) |
+| `date` | Numeric dates (DD/MM/YYYY, YYYY-MM-DD) |
+
+Returns `(redacted_text, count, list_of_types)`. Replaces matches with `[REDACTED]`. Called by `clean_transcript()` before any LLM sees the text.
+
+**`has_injection(text: str) -> bool`**
+
+Detects prompt injection patterns (7 patterns: "ignore previous instructions", "you are now a different AI", jailbreak markers, etc.). Called only on Gateway A (caseworker route) — not kiosk.
+
+---
+
+### `backend/guardrails_client.py` — NeMo Guardrails (new)
+
+**`init_guardrails() -> bool`** — Called at startup in lifespan. Loads `guardrails/config.yml` + `guardrails/rails.co`. Injects a `PassthroughLLM` as the NeMo backend so inputs that pass all rails return `__PASS__` instantly (zero network overhead). Returns False and logs `"disabled"` if `GUARDRAILS_ENABLED` not set or `nemoguardrails` not installed.
+
+**`async check_input(text: str) -> tuple[bool, str]`** — Called on both caseworker and kiosk routes after `clean_transcript()`. Returns `(True, "ok")` for safe inputs, `(False, "blocked")` for rails violations. Never raises — fail-open `(True, "unavailable")` on any error.
+
+**Rail definitions (`guardrails/rails.co`, colang 1.0):**
+- `check jailbreak` — blocks "ignore previous instructions", "you are now a different AI", etc.
+- `check harmful request` — blocks "how to get drugs illegally", "how to hurt myself", etc.
+
+**Refusal messages** are defined in the colang file and cross-checked in `check_input()` by substring match. Enable via `GUARDRAILS_ENABLED=1`.
 
 ---
 
@@ -326,12 +386,16 @@ _rapids_mode: str = "cpu"  # "gpu" if RAPIDS loaded
 
 **CORS:** `os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")` — GET+POST, Content-Type only
 
+**Lifespan hook:** GPU load → CPU load → `init_guardrails()` → `fetch_weather_alert()` → start `_session_gc()` + `_hydration_loop()` asyncio tasks.
+
 **Request models with validation:**
 ```python
-CaseworkerRouteRequest: text, origin_lat=Field(43.6532, ge=-90, le=90),
-                        origin_lon=Field(-79.3832, ge=-180, le=180), client_name?
-KioskSessionRequest:    transcript, origin_lat=Field(..., ge=-90, le=90),
-                        origin_lon=Field(..., ge=-180, le=180)
+CaseworkerRouteRequest: text=Field(..., max_length=5000),
+                        origin_lat=Field(43.6532, ge=-90, le=90),
+                        origin_lon=Field(-79.3832, ge=-180, le=180),
+                        client_name=Field(None, max_length=100)
+KioskSessionRequest:    transcript=Field(..., max_length=2000),
+                        origin_lat, origin_lon
 KioskRouteRequest:      session_id, eligibility_answers: dict
 BriefingRequest:        current_time_iso
 HandoffRequest:         facility_name, facility_phone, payload: NeedsPayload
@@ -341,13 +405,22 @@ HandoffRequest:         facility_name, facility_phone, payload: NeedsPayload
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| GET | `/api/v1/health` | Status, rapids_mode, NIM_ENDPOINT (from config), dataset row counts |
+| GET | `/api/v1/health` | Status, rapids_mode, NIM_ENDPOINT, dataset row counts, **nemo_guardrails** status |
 | GET | `/api/v1/benchmark` | Last GPU/CPU solve times and speedup ratio |
-| POST | `/api/v1/caseworker/route` | Text -> NeedsPayload -> GPU+CPU solve -> itinerary + ticket |
-| POST | `/api/v1/kiosk/session` | Voice transcript -> session + eligibility questions |
-| POST | `/api/v1/kiosk/route` | Session + answers -> merged payload -> solve -> itinerary |
-| POST | `/api/v1/caseworker/briefing` | Shelter stats -> NIM summary -> briefing text |
-| POST | `/api/v1/handoff-script` | Facility + payload -> NIM phone script |
+| GET | `/api/v1/system` | Live GPU utilization via pynvml (GX10) |
+| GET | `/api/v1/telemetry/summary` | Shadow Census aggregate stats from daily_telemetry.csv |
+| POST | `/api/v1/transcribe` | **NEW** — audio blob → Parakeet ASR NIM → transcript text (3-tier: local→cloud→503) |
+| POST | `/api/v1/caseworker/route` | PII scrub → injection check → NeMo Guardrails → NeedsPayload → GPU+CPU solve → itinerary |
+| POST | `/api/v1/kiosk/session` | PII scrub → NeMo Guardrails → NeedsPayload → session + eligibility questions |
+| POST | `/api/v1/kiosk/route` | Session + answers → merged payload → solve → itinerary |
+| POST | `/api/v1/caseworker/briefing` | Shelter stats → NIM summary → briefing text |
+| POST | `/api/v1/handoff-script` | Facility + payload → NIM phone script |
+
+**Safety pipeline on caseworker route** (in order):
+1. `clean_transcript()` — filler removal + `redact_pii()` (phone, email, SIN, OHIP, postal, date)
+2. `has_injection()` — regex injection detection → HTTP 400 if triggered
+3. `guardrails_check()` — NeMo Guardrails colang rail check → HTTP 400 if triggered
+4. `compile_needs_async()` — LLM triage with PRIVACY RULE prompt
 
 ---
 
@@ -382,17 +455,28 @@ Origin hardcoded to `(43.6532, -79.3832)` (downtown Toronto — known remaining 
 
 Sub-components: VoiceInput, PayloadConfirm, Itinerary, Ticket, HandoffScript, ShiftBriefing, BenchmarkPanel.
 
+### `frontend/src/components/shared/useSpeech.ts`
+
+**TTS:** `pitch=0.85` (calmer), preferred voice list: `Google UK English Female → Samantha → Karen → Moira → Google US English`. Falls back to system default.
+
+**Dual recording (new):** `startRecording()` uses `MediaRecorder` with 250ms timeslice. `stopRecording()` returns `Promise<Blob | null>` — waits for `onstop` to capture final chunk. `transcribeAudio(blob)` POSTs to `/api/v1/transcribe` and returns the ASR transcript string or null.
+
+### `frontend/src/components/GatewayB/VoiceOrb.tsx`
+
+**Tap-to-toggle (changed from hold-to-release).** Props: `{ state, onClick }` (was `onPointerDown`/`onPointerUp`). Labels: `"Tap to speak"` (idle), `"Tap when done"` (listening).
+
 ### `frontend/src/components/GatewayB/KioskPage.tsx`
 
 State machine: `idle -> recording -> processing -> eligibility -> routing -> speaking -> done`
 
 Accessibility rule: No text input or form elements. Only VoiceOrb is focusable.
 
-Key behaviours:
-- Idle greeting after 800ms delay
-- Transcript validated against `VOICE_MIN_CHARS` (10) before API call
-- `error` state now wired — `setError()` called in all catch blocks, cleared on success
-- Idle timer resets everything after `VOICE_SESSION_IDLE_MS`
+**New interaction model (tap-to-toggle):**
+- First tap: `startListening()` (Web Speech for live transcript display) + `startRecording()` (MediaRecorder for ASR NIM)
+- Second tap: `stopListening()` + await `stopRecording()` → `transcribeAudio(blob)` → if null fall back to Web Speech `transcript`
+- Live transcript shows below orb during `recording` and `processing` states
+
+**Warmer spoken text (all messages updated):** "Welcome. I'm here to help you find shelter, food, or care…", "I'm sorry, I didn't catch that…", etc.
 
 ### `frontend/src/components/GatewayB/EligibilityFlow.tsx`
 
@@ -400,7 +484,7 @@ State machine: `speaking_question -> waiting_for_answer -> complete`
 
 Speaks 1-3 questions via TTS, listens for voice answers, calls `onComplete(answers)`.
 
-Race condition fix: `useEffect` that handles transcript now depends on `[transcript, idx, flowState]`.
+**Tap to submit early (new):** VoiceOrb `onClick` calls `advanceOrComplete(idx, transcript)` when in `waiting_for_answer` state. Auto-submit on transcript > 3 chars and 30s timeout still work as fallback.
 
 `parseAnswer(question, answer)` — mirrors `backend/voice_session.py::parse_eligibility_answer()` logic.
 
@@ -503,6 +587,10 @@ From `AGENTS.md` — apply to ALL AI tools working on this codebase:
 
 6. **Kiosk (Gateway B) is voice-only.** No text inputs, no form elements. Tab audit: only VoiceOrb should be focusable. Questions are TTS-only.
 
+7. **All user input is PII-scrubbed before LLM.** `pii_scrubber.redact_pii()` is called inside `voice_session.clean_transcript()`. Never bypass. Patterns: phone, email, SIN, OHIP, postal code, dates.
+
+8. **Prompt injection is blocked on Gateway A.** `pii_scrubber.has_injection()` is called after cleaning in `caseworker_route()`. Returns HTTP 400 with a neutral message. Never log the injected text at INFO or above.
+
 ---
 
 ## 7. Recent Changes Log
@@ -532,6 +620,43 @@ From `AGENTS.md` — apply to ALL AI tools working on this codebase:
 | Transit longitude conversion | `solver.py:_check_transit` | `73_000` -> `80_000` (Toronto ~80 km/degree) |
 | Null payload crash | `main.py:kiosk_route` | Added `or session.payload_draft is None` guard |
 | Countdown double-fire | `PayloadConfirm.tsx` | Added `submitted = useRef(false)` gate |
+
+### Session 3 — Stability + Deployment Fixes
+
+| Fix | File | Change |
+|-----|------|--------|
+| `has_id=None` masking | `solver.py:elig()` | `is False` → `is not True` — conservatively excludes ID-required facilities |
+| NIM timeout fast-fail | `nim_compiler.py` | Added `APIConnectionError, APITimeoutError` catch with `break` — skips remaining retries immediately |
+| Docker pip cache | `docker-compose.yml` | Added `pip-cache` named volume; dropped `--reload` from backend container |
+| GX10 startup script | `start-gx10.sh` | New script: hardware check, .env validation, venv setup, data verify, terminal layout instructions |
+
+### Session 4 — Voice UX + Kiosk Redesign
+
+| Change | File | Detail |
+|--------|------|--------|
+| TTS voice quality | `useSpeech.ts` | `pitch=0.85`; preferred voice list: Google UK English Female → Samantha → Karen → Moira |
+| Tap-to-toggle | `VoiceOrb.tsx` | Props: `onClick` (was `onPointerDown`/`onPointerUp`); labels: "Tap to speak" / "Tap when done" |
+| Kiosk interaction | `KioskPage.tsx` | `handleOrbTap` replaces `handleOrbDown`/`handleOrbUp`; dual recording (MediaRecorder + Web Speech) |
+| Live transcript | `KioskPage.tsx` | Transcript shown below orb during `recording`/`processing` states |
+| Warm spoken text | `KioskPage.tsx` | All 4 TTS messages rewritten: "Welcome. I'm here to help you…" etc. |
+| Eligibility tap | `EligibilityFlow.tsx` | VoiceOrb `onClick` submits answer early; auto-submit and timeout still work as fallback |
+| Warm TTS script | `voice_session.py` | `build_tts_itinerary_script`: "First, go to…", "Next…", "I hope this helps." |
+| NVIDIA ASR NIM | `main.py`, `docker-compose.yml`, `useSpeech.ts` | `POST /api/v1/transcribe`; Parakeet-0.6B-CTC on :9000; `transcribeAudio()` in frontend; `stopRecording()` now async |
+| python-multipart | `requirements.txt` | Added — required by FastAPI `UploadFile` |
+
+### Session 5 — PII Guardrails + NeMo Guardrails
+
+| Change | File | Detail |
+|--------|------|--------|
+| PII scrubber | `backend/pii_scrubber.py` (new) | `redact_pii()`: 6 Canadian PII patterns; `has_injection()`: 7 injection patterns |
+| PII in transcript cleaning | `voice_session.py` | `clean_transcript()` calls `redact_pii()` after filler removal |
+| Privacy rule in NIM prompt | `config.py` | `NIM_TRIAGE_PROMPT` opens with PRIVACY RULE block: ignore names/addresses/health |
+| Input length limits | `main.py` | `text` max 5000, `transcript` max 2000, `client_name` max 100 |
+| Remove transcript from logs | `main.py` | Replaced `transcript[:120]` debug log with `"{len} chars"` — no PII in logfiles |
+| Injection guard | `main.py:caseworker_route` | `has_injection()` check after cleaning → HTTP 400 with neutral message |
+| NeMo Guardrails | `guardrails_client.py` (new), `guardrails/config.yml`, `guardrails/rails.co` | `init_guardrails()` + `check_input()` on both routes; PassthroughLLM for zero inference overhead; colang rails for jailbreak + harmful |
+| Health endpoint | `main.py` | `nemo_guardrails: "active"|"disabled"` field added |
+| AGENTS.md / CLAUDE.md | governance files | Rules 7 + 8 added; two new Hard Boundaries |
 
 ---
 
@@ -605,33 +730,48 @@ Change `NIM_MODEL` in `config.py`. Any OpenAI-spec server works. Triage prompt's
 
 ## 10. Testing Checklist
 
-**Backend:**
-- [ ] `python backend/data_ingestion.py --verify --mode cpu` — 7 datasets load with row counts
+**Backend startup:**
+- [ ] `python backend/data_ingestion.py --verify --mode cpu` — datasets load with row counts
 - [ ] `uvicorn backend.main:app --reload` starts without errors
-- [ ] `GET /api/v1/health` returns `status: ok` with actual NIM_ENDPOINT value
+- [ ] `GET /api/v1/health` returns `status: ok`, `nemo_guardrails: "disabled"` (default) or `"active"`
+- [ ] Startup log shows: `guardrails=active` or `guardrails=disabled`
+
+**PII + injection:**
+- [ ] `python3 -c "from backend.pii_scrubber import redact_pii, has_injection; ..."` — verify patterns fire
+- [ ] Logs show `"PII redacted: N items"` not transcript content when PII is present
+- [ ] `POST /caseworker/route` with `"ignore previous instructions"` → HTTP 400
+- [ ] `POST /caseworker/route` with text > 5000 chars → HTTP 422
+- [ ] `POST /kiosk/session` with transcript > 2000 chars → HTTP 422
+
+**ASR NIM (when Parakeet container running on :9000):**
+- [ ] `curl http://localhost:9000/v1/models` — returns model list
+- [ ] `POST /api/v1/transcribe` with valid audio file → `{"transcript": "...", "source": "local"}`
+- [ ] Kill container → `POST /api/v1/transcribe` → HTTP 503 (frontend falls back to Web Speech)
+
+**Routing:**
 - [ ] `POST /api/v1/caseworker/route` with "need shelter food no ID been drinking" returns itinerary
 - [ ] `compile_method` is `"nim"` if LLM running, `"regex"` if not
 - [ ] `POST /api/v1/caseworker/route` with `origin_lat=999` returns HTTP 422
-
-**Kiosk voice flow:**
 - [ ] `POST /kiosk/session` with transcript < 10 chars returns HTTP 400
-- [ ] `POST /kiosk/session` returns `eligibility_questions` for shelter needs
-- [ ] `POST /kiosk/route` with valid session_id returns itinerary
 - [ ] `POST /kiosk/route` with invalid session_id returns HTTP 404
 
 **Solver:**
 - [ ] Results sorted by composite_score ascending
 - [ ] Shelter results filtered to UNOCCUPIED_BEDS > 0
-- [ ] `transit_accessible: true` only for facilities near a TTC stop
+- [ ] Shelter with `requires_id=True` excluded when `has_id=None` (conservative masking)
 - [ ] `python backend/solver.py --benchmark` completes
 
-**Frontend:**
-- [ ] `/caseworker` — VoiceInput -> PayloadConfirm (5s countdown) -> Itinerary renders
-- [ ] `/caseworker` — ShiftBriefing loads, HandoffScript modal generates script
-- [ ] `/kiosk` — Hold orb -> release -> eligibility questions spoken via TTS
-- [ ] `/kiosk` — Tab audit: only VoiceOrb is focusable
-- [ ] `/kiosk` — Error banner visible when route fails
-- [ ] `/kiosk` — Short transcript (< 10 chars) triggers "didn't hear" response, not 400 error
+**Frontend kiosk (Chrome required):**
+- [ ] Single tap starts listening + recording; second tap stops both
+- [ ] Live transcript appears below orb while recording
+- [ ] TTS greeting: "Welcome. I'm here to help you find shelter, food, or care…"
+- [ ] Eligibility questions are spoken (not shown as text)
+- [ ] Tap during eligibility `waiting_for_answer` submits early
+- [ ] Tab audit: only VoiceOrb is focusable
+
+**Frontend caseworker:**
+- [ ] VoiceInput → PayloadConfirm (5s countdown) → Itinerary renders
+- [ ] ShiftBriefing loads, HandoffScript modal generates script
 
 ---
 

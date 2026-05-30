@@ -27,6 +27,7 @@ from config import (
     ASR_NIM_URL, ASR_CLOUD_URL, ASR_NIM_TIMEOUT,
 )
 from data_ingestion import load_all, fetch_weather_alert, get_weather_alert, refresh_shelters
+from guardrails_client import init_guardrails, check_input as guardrails_check
 from pii_scrubber import has_injection
 from nim_compiler import (
     NeedsPayload,
@@ -134,7 +135,14 @@ async def lifespan(app: FastAPI):
 
     # Fetch weather alert at startup (500ms fail-safe)
     fetch_weather_alert()
-    logger.info(f"[READY] rapids_mode={_rapids_mode}  weather={get_weather_alert()}")
+
+    # Initialise NeMo Guardrails (optional — no-op if GUARDRAILS_ENABLED not set)
+    guardrails_active = init_guardrails()
+    logger.info(
+        f"[READY] rapids_mode={_rapids_mode}  "
+        f"weather={get_weather_alert()}  "
+        f"guardrails={'active' if guardrails_active else 'disabled'}"
+    )
 
     # Initialise telemetry CSV header
     if not TELEMETRY_CSV.exists():
@@ -268,13 +276,15 @@ def _call_asr(base_url: str, audio_data: bytes, content_type: str) -> str:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/api/v1/health")
 async def health():
+    from guardrails_client import _rails as _gr_rails
     return {
-        "status":        "ok",
-        "rapids_mode":   _rapids_mode,
-        "nim_endpoint":  NIM_ENDPOINT,
-        "weather_alert": get_weather_alert(),
-        "datasets":      {k: len(v) for k, v in datasets_gpu.items()},
-        "total_records": sum(len(v) for v in datasets_gpu.values()),
+        "status":           "ok",
+        "rapids_mode":      _rapids_mode,
+        "nim_endpoint":     NIM_ENDPOINT,
+        "weather_alert":    get_weather_alert(),
+        "datasets":         {k: len(v) for k, v in datasets_gpu.items()},
+        "total_records":    sum(len(v) for v in datasets_gpu.values()),
+        "nemo_guardrails":  "active" if _gr_rails is not None else "disabled",
     }
 
 
@@ -399,6 +409,12 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
         logger.warning(f"[{rid}] prompt injection attempt detected — blocking")
         raise HTTPException(status_code=400, detail="Input could not be processed. Please rephrase.")
 
+    allowed, gr_reason = await guardrails_check(cleaned)
+    if not allowed:
+        logger.warning(f"[{rid}] NeMo Guardrails blocked input reason={gr_reason}")
+        raise HTTPException(status_code=400, detail="Input could not be processed. Please rephrase.")
+    logger.debug(f"[{rid}] guardrails={gr_reason}")
+
     payload, method, nim_ms = await compile_needs_async(cleaned)
     logger.info(f"[{rid}] compile method={method} latency={nim_ms:.0f}ms")
     logger.info(f"[{rid}] payload {payload.model_dump()}")
@@ -459,6 +475,13 @@ async def kiosk_session(req: KioskSessionRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
     logger.debug(f"[{rid}] kiosk transcript accepted: {len(cleaned)} chars")
+
+    allowed, gr_reason = await guardrails_check(cleaned)
+    if not allowed:
+        logger.warning(f"[{rid}] NeMo Guardrails blocked kiosk input reason={gr_reason}")
+        raise HTTPException(status_code=400, detail="I'm sorry, I can't process that. Please tell me what you need.")
+    logger.debug(f"[{rid}] guardrails={gr_reason}")
+
     payload, method, nim_ms = await compile_needs_async(cleaned)
     logger.info(f"[{rid}] kiosk compile method={method} latency={nim_ms:.0f}ms")
     logger.info(f"[{rid}] kiosk payload {payload.model_dump()}")

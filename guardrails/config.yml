@@ -1,0 +1,21 @@
+# NeMo Guardrails config for Haven Matrix
+# LLM backend: Gemma 3n E4B via local NIM (:8001) or cloud NIM
+# At runtime, guardrails_client.py overrides this with a PassthroughLLM so
+# inputs that PASS the rails return instantly with zero network overhead.
+# The model config below is used as fallback if the passthrough LLM init fails.
+
+models:
+  - type: main
+    engine: openai
+    model: google/gemma-3n-e4b-it
+    parameters:
+      base_url: "${env.NIM_ENDPOINT}"
+      api_key: "${env.NIM_API_KEY}"
+      max_tokens: 20
+      temperature: 0.0
+
+rails:
+  input:
+    flows:
+      - check jailbreak
+      - check harmful request
