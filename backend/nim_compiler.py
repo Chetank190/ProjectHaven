@@ -73,14 +73,40 @@ def _nim_tiers() -> list[tuple[str, str, str]]:
     return tiers
 
 
-def compile_needs(text: str) -> tuple[NeedsPayload, str, float]:
-    """Convert text → NeedsPayload. Returns (payload, method, latency_ms)."""
+def _build_triage_user_message(text: str, similar_cases: list | None) -> str:
+    """
+    Prepend resolved past-case context so the LLM can calibrate sector/needs
+    against patterns this caseworker has already handled.
+    """
+    if not similar_cases:
+        return text
+    lines = ["[CONTEXT: Similar resolved cases — use to calibrate sector and needs extraction]"]
+    for c in similar_cases[:3]:
+        placed   = c.get("placed_at") or "not placed"
+        outcome  = c.get("outcome", "unknown")
+        snippet  = (c.get("transcript") or "")[:120].replace("\n", " ")
+        lines.append(f"• \"{snippet}...\" → {placed} | outcome: {outcome}")
+    lines.append("")
+    lines.append("[CURRENT CLIENT NOTES]")
+    lines.append(text)
+    return "\n".join(lines)
+
+
+def compile_needs(
+    text: str, similar_cases: list | None = None
+) -> tuple[NeedsPayload, str, float]:
+    """Convert text → NeedsPayload. Returns (payload, method, latency_ms).
+
+    similar_cases: resolved past cases from CaseStore.find_similar() injected
+    as RAG context so the LLM learns from previous placements by this caseworker.
+    """
     t0 = time.perf_counter()
+    user_msg = _build_triage_user_message(text, similar_cases)
 
     for endpoint, model, api_key in _nim_tiers():
         for attempt in range(NIM_MAX_RETRIES + 1):
             try:
-                raw = _call_nim(text, endpoint, NIM_TRIAGE_PROMPT, model=model, api_key=api_key)
+                raw = _call_nim(user_msg, endpoint, NIM_TRIAGE_PROMPT, model=model, api_key=api_key)
                 payload = NeedsPayload(**raw)
                 ms = (time.perf_counter() - t0) * 1000
                 logger.info(f"NIM triage OK endpoint={endpoint} model={model} latency={ms:.0f}ms")
@@ -152,8 +178,10 @@ def generate_handoff_script(facility_name: str, payload: NeedsPayload) -> str:
     return f"Script unavailable — compose the call manually. Facility: {facility_name}."
 
 
-async def compile_needs_async(text: str) -> tuple[NeedsPayload, str, float]:
-    return await asyncio.to_thread(compile_needs, text)
+async def compile_needs_async(
+    text: str, similar_cases: list | None = None
+) -> tuple[NeedsPayload, str, float]:
+    return await asyncio.to_thread(compile_needs, text, similar_cases)
 
 
 async def generate_briefing_async(shelter_summary: str) -> str:

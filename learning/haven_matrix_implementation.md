@@ -1,10 +1,10 @@
 # Haven Matrix — Implementation Reference & LLM Handoff
 
-> **Last updated:** 2026-05-30 (Session 5 — NeMo Guardrails + ASR NIM + PII + Voice UX)
-> **Last commit:** `c437d2a` + all sessions below
-> **Status:** Fully functional in CPU/regex mode (local dev). Cloud NIM active when NGC_API_KEY set. GPU path requires RAPIDS container on GX10. ASR NIM optional (port 9000). NeMo Guardrails optional (GUARDRAILS_ENABLED=1).
+> **Last updated:** 2026-05-30 (Session 10 — EDA integration, auth, map view, returning-client detection, capacity ticker, speech improvements)
+> **Last commit:** `d1b8de0` (uncommitted changes since then — auth, case store wiring, speech, map, EDA data)
+> **Status:** Fully functional in CPU/NIM mode. Auth working (register/login/JWT). Case store saving cases. Map view active. Capacity ticker polling. Speech on `en-IN`. Cloud NIM active if `NGC_API_KEY` set. GPU path requires RAPIDS container on GX10. Frontend on `:5173`.
 
-This document is the authoritative source for continuing work on Haven Matrix. It covers the full current state of every module, recent changes, known remaining issues, and how to extend the system.
+This document is the authoritative source for continuing work on Haven Matrix. It covers the complete current state of every module, all session changes, known issues, and how to extend the system.
 
 ---
 
@@ -29,60 +29,69 @@ This document is the authoritative source for continuing work on Haven Matrix. I
 ### Architecture
 
 ```
-+-------------------------------------------------------------+
-|                    PRESENTATION LAYER                        |
-|  Gateway A (Caseworker)    |  Gateway B (Kiosk - voice only)|
-|  React :3000/caseworker    |  React :3000/kiosk             |
-+-------------------------------------------------------------+
-                         | HTTP POST (Vite proxy /api -> :8000)
-+-------------------------------------------------------------+
-|              FastAPI BACKEND  (port 8000)                    |
-|  POST /api/v1/caseworker/route                              |
-|  POST /api/v1/kiosk/session + /kiosk/route                  |
-|  POST /api/v1/transcribe  (audio → ASR NIM)                 |
-|  POST /api/v1/caseworker/briefing                           |
-|  POST /api/v1/handoff-script                                |
-|  GET  /api/v1/benchmark  |  GET /api/v1/health              |
-+-------------------------------------------------------------+
-          |                            |
++---------------------------------------------------------------+
+|                    PRESENTATION LAYER                          |
+|  Gateway A (Caseworker — requires login)                      |
+|  Gateway B (Kiosk — public, voice-only)                       |
+|  React :5173/caseworker  |  React :5173/kiosk                 |
++---------------------------------------------------------------+
+                       | HTTP (Vite proxy /api -> :8000)
++---------------------------------------------------------------+
+|              FastAPI BACKEND  (port 8000)                      |
+|  POST /api/v1/auth/register   POST /api/v1/auth/login         |
+|  GET  /api/v1/auth/me                                         |
+|  POST /api/v1/caseworker/route                                |
+|  POST /api/v1/kiosk/session + /kiosk/route                    |
+|  GET  /api/v1/caseworker/{id}/history                         |
+|  PATCH /api/v1/case/{id}/outcome                              |
+|  GET  /api/v1/capacity                                        |
+|  POST /api/v1/transcribe  |  POST /api/v1/caseworker/briefing |
+|  POST /api/v1/handoff-script                                  |
+|  GET  /api/v1/health  |  /benchmark  |  /system  |  /telemetry|
++---------------------------------------------------------------+
+           |                            |
 +---------------------+   +--------------------------+
-|  SAFETY LAYER       |   |  ASR INFERENCE (port 9000)|
+|  SAFETY LAYER       |   |  ASR (port 9000, optional)|
 |  pii_scrubber.py    |   |  Parakeet-0.6B-CTC NIM   |
-|  NeMo Guardrails    |   |  (optional; Web Speech    |
-|  (GUARDRAILS_       |   |   API fallback in browser)|
-|   ENABLED=1)        |   +--------------------------+
+|  NeMo Guardrails    |   |  Web Speech API fallback  |
+|  crisis_gate.py     |   +--------------------------+
 +---------------------+
-          |
-+-------------------------------------------------------------+
-|     LLM INFERENCE (4-tier chain)                            |
-|     cloud NIM → llama.cpp :30000 → NIM container :8001      |
-|     Fallback: regex keyword extractor (always available)    |
-+-------------------------------------------------------------+
-                         |
-+-------------------------------------------------------------+
-|     GPU DATA (RAPIDS - 128 GB unified memory on GX10)       |
-|     cuDF: 7 datasets (shelters, rehab, food, hygiene,       |
-|           grassroots, OSM, TTC stops)                       |
-|     cuML: NearestNeighbors KNN (haversine, < 10ms GPU)      |
-|     CPU fallback: pandas + scikit-learn (~400ms)            |
-+-------------------------------------------------------------+
+           |
++---------------------------------------------------------------+
+|     LLM INFERENCE (4-tier chain)                              |
+|     cloud NIM (NGC_API_KEY) → llama.cpp :30000 →              |
+|     NIM container :8001 → regex fallback (always works)       |
++---------------------------------------------------------------+
+                       |
++---------------------------------------------------------------+
+|     PERSISTENCE                                               |
+|     logs/cases.db  SQLite — users + cases (auth + history)   |
+|     TF-IDF cosine  sklearn — similar-case RAG lookup         |
++---------------------------------------------------------------+
+                       |
++---------------------------------------------------------------+
+|     GPU DATA (RAPIDS — 128 GB unified memory on GX10)         |
+|     cuDF: 10 datasets loaded. cuML KNN haversine < 10ms       |
+|     CPU fallback: pandas + scikit-learn (~400ms)              |
++---------------------------------------------------------------+
 ```
 
 ### Tech Stack
 
 | Layer | Tech | Why |
 |-------|------|-----|
-| LLM | Nemotron-30B via llama.cpp | Fits in 128 GB unified memory; deterministic JSON output |
+| LLM | Nemotron-30B via llama.cpp | Fits in 128 GB unified memory; deterministic JSON |
 | LLM fallback | Gemma 3n E4B via NIM container (:8001) | NVFP4 on Blackwell; same OpenAI API |
-| ASR | Parakeet-0.6B-CTC via NIM (:9000) | NVIDIA speech recognition; ~3 GB; Web Speech API fallback |
-| Guardrails | NeMo Guardrails + `pii_scrubber.py` | Pattern-matching rails (jailbreak, harmful); Canadian PII redaction |
-| Backend | FastAPI + uvicorn | Async; Pydantic validation; auto Swagger at /docs |
-| GPU compute | cuDF + cuML (RAPIDS) | Zero-copy data; KNN in < 10ms vs ~400ms pandas |
-| CPU fallback | pandas + scikit-learn | Identical API; automatically used on MacBook dev |
-| Frontend | React + Vite + TypeScript | Fast; dual-recording (MediaRecorder + Web Speech) |
-| Voice input | MediaRecorder → Parakeet ASR NIM | GPU ASR; falls back to Web Speech API if NIM offline |
-| Voice output | speechSynthesis (browser) | pitch=0.85, preferred voice (Google UK English Female) |
-| Deployment | Docker Compose (GX10) | nvidia runtime; nim + asr services |
+| ASR | Parakeet-0.6B-CTC NIM (:9000) | NVIDIA speech; ~3 GB; Web Speech fallback |
+| Auth | passlib[bcrypt==4.0.1] + python-jose (JWT HS256) | Email+password; 24h tokens |
+| Case store | SQLite (stdlib) + TF-IDF (sklearn) | Zero deps; RAG lookup; upgrade path = ChromaDB |
+| Guardrails | NeMo Guardrails + pii_scrubber.py | Colang rails; Canadian PII redaction |
+| Backend | FastAPI + uvicorn | Async; Pydantic validation; auto Swagger |
+| GPU compute | cuDF + cuML (RAPIDS) | Zero-copy KNN < 10ms vs ~400ms pandas |
+| Frontend | React + Vite + TypeScript | Dual-recording; protected routes |
+| Voice (STT) | Web Speech API (`en-IN`) → Parakeet ASR NIM | Browser-native; Indian English locale |
+| Voice (TTS) | speechSynthesis (browser) | pitch=0.85; preferred voice list |
+| Map | Leaflet (lazy-loaded) | Colored pins per pillar; no API key needed |
 
 ---
 
@@ -90,285 +99,213 @@ This document is the authoritative source for continuing work on Haven Matrix. I
 
 ### `backend/config.py` — All Constants
 
-No logic. Tune everything here. Other modules import from here.
+No logic. Tune everything here.
 
 **File paths:**
 ```python
-DATA_DIR       = Path("data")
-SHELTERS_CSV   = DATA_DIR / "shelters.csv"
-REHAB_CSV      = DATA_DIR / "rehab_services.csv"
-FOOD_CSV       = DATA_DIR / "food_banks.csv"
-HYGIENE_CSV    = DATA_DIR / "hygiene_stations.csv"
-GRASSROOTS_CSV = DATA_DIR / "grassroots_services.csv"
-OSM_JSON       = DATA_DIR / "osm_amenities.json"
-GTFS_STOPS_TXT = DATA_DIR / "stops.txt"
+DATA_DIR        = Path("data")
+LOG_DIR         = Path("logs")
+CASE_DB_PATH    = LOG_DIR / "cases.db"    # SQLite — users + cases
+SHELTERS_CSV    = DATA_DIR / "shelters.csv"
+REHAB_CSV       = DATA_DIR / "rehab_services.csv"
+FOOD_CSV        = DATA_DIR / "food_banks.csv"
+HYGIENE_CSV     = DATA_DIR / "hygiene_stations.csv"   # 817 rows after EDA integration
+GRASSROOTS_CSV  = DATA_DIR / "grassroots_services.csv"
+OSM_JSON        = DATA_DIR / "osm_amenities.json"
+GTFS_STOPS_TXT  = DATA_DIR / "stops.txt"
+YOUTH_SPACES_CSV = DATA_DIR / "youth_spaces.csv"
+LIBRARIES_CSV   = DATA_DIR / "libraries.csv"
+RESPITE_CSV     = DATA_DIR / "respite_sites.csv"      # 1,599 rows after EDA integration
 ```
 
-**LLM endpoints (override via env vars):**
+**LLM endpoints:**
 ```python
-NIM_ENDPOINT    = os.environ.get("NIM_ENDPOINT", "http://localhost:30000/v1")   # llama.cpp
-NIM_FALLBACK    = os.environ.get("NIM_FALLBACK", "http://localhost:8001/v1")    # NIM container
-NIM_MODEL       = "nemotron"
+NVIDIA_CLOUD_ENDPOINT = "https://integrate.api.nvidia.com/v1"   # Tier 1 (needs NGC_API_KEY)
+NVIDIA_CLOUD_MODEL    = "google/gemma-3n-e4b-it"
+NIM_ENDPOINT    = os.environ.get("NIM_ENDPOINT", "http://localhost:30000/v1")  # Tier 2 llama.cpp
+NEMOTRON_MODEL  = "nemotron"
+NIM_FALLBACK    = os.environ.get("NIM_FALLBACK", "http://localhost:8001/v1")   # Tier 3 NIM container
+NIM_MODEL       = "google/gemma-3n-e4b-it"
 NIM_TIMEOUT_SEC = 15
 NIM_MAX_RETRIES = 2
-
-# Skip cuDF/cuML when true — reserve GPU for LLM (Gemma NIM / llama.cpp)
-FORCE_CPU_SOLVER = os.environ.get("FORCE_CPU_SOLVER", "0").lower() in ("1", "true", "yes")
+FORCE_CPU_SOLVER = os.environ.get("FORCE_CPU_SOLVER", "0").lower() in ("1","true","yes")
 ```
 
-**Solver weights (FR-5 Congestion Balancer):**
+**ASR constants:**
 ```python
-WEIGHT_DISTANCE  = 0.60   # normalized km distance (lower = closer = better)
-WEIGHT_OCCUPANCY = 0.30   # occupancy_ratio 0.0-1.0 (lower = more available = better)
-WEIGHT_TRANSIT   = 0.10   # 0.0 if transit nearby, 1.0 if not
-TRANSIT_RADIUS_M = 200    # metres to nearest TTC stop
+ASR_NIM_URL     = os.environ.get("ASR_NIM_URL", "http://localhost:9000")
+ASR_CLOUD_URL   = os.environ.get("ASR_CLOUD_URL", "https://integrate.api.nvidia.com/v1")
+ASR_NIM_TIMEOUT = 30
+```
+
+**Auth constants (in auth_store.py, not config.py):**
+```python
+JWT_SECRET    = os.environ.get("JWT_SECRET", "haven-matrix-dev-secret-change-in-prod")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_H  = 24
+```
+**CRITICAL:** Set `JWT_SECRET` in `.env` for production. Default is insecure.
+
+**Solver weights:**
+```python
+WEIGHT_DISTANCE  = 0.60
+WEIGHT_OCCUPANCY = 0.30
+WEIGHT_TRANSIT   = 0.10
+TRANSIT_RADIUS_M = 200
 KNN_RESULTS_PER_PILLAR = 3
 ```
 
-**Voice/session timeouts:**
+**Voice timeouts (frontend `config.ts` must mirror these manually):**
 ```python
 VOICE_HOLD_MAX_SEC         = 45
-VOICE_SILENCE_KILL_SEC     = 10
+VOICE_SILENCE_KILL_SEC     = 2.5   # reduced from 10 — natural pause
 VOICE_SESSION_IDLE_SEC     = 120
 VOICE_ELIGIBILITY_WAIT_SEC = 30
 VOICE_MIN_TRANSCRIPT_CHARS = 10
 ```
 
-**Eligibility question triggers:**
-```python
-ASK_ID_FOR_PILLARS       = ["shelter", "rehab"]
-ASK_SOBRIETY_FOR_PILLARS = ["shelter"]
-ASK_GROUP_FOR_PILLARS    = ["shelter"]
-```
-
-**Kiosk hub coordinates (pre-set locations for Gateway B):**
+**Kiosk hub coordinates — 12 locations:**
+All data-driven from `shelters.csv` clustering.
 ```python
 KIOSK_HUBS = {
-    "Union Station":      (43.6452, -79.3806),
-    "Yonge & Dundas":     (43.6561, -79.3802),
-    "Scarborough Centre": (43.7731, -79.2573),
-    "Regent Park":        (43.6583, -79.3601),
-    "Etobicoke Civic":    (43.6435, -79.5665),
+    "Moss Park / Sherbourne":   (43.6530, -79.3680),
+    "Seaton House / George St": (43.6545, -79.3706),
+    "Regent Park":              (43.6584, -79.3606),
+    "Union Station":            (43.6452, -79.3806),
+    "Yonge & Dundas":           (43.6561, -79.3802),
+    "Spadina & Dundas":         (43.6538, -79.4004),
+    "Parkdale":                 (43.6478, -79.4490),
+    "Bloor & Christie":         (43.6620, -79.4200),
+    "Danforth & Pape":          (43.6782, -79.3541),
+    "Scarborough Centre":       (43.7731, -79.2570),
+    "Etobicoke Civic":          (43.6435, -79.5605),
+    "North York Centre":        (43.7680, -79.4130),
 }
-KIOSK_DEFAULT_HUB = os.environ.get("VITE_KIOSK_HUB", "Union Station")
+# Empty VITE_KIOSK_HUB (default) = always show hub selector on kiosk start
 ```
-
-**ASR NIM constants (new):**
-```python
-ASR_NIM_URL     = os.environ.get("ASR_NIM_URL",   "http://localhost:9000")
-ASR_CLOUD_URL   = os.environ.get("ASR_CLOUD_URL", "https://integrate.api.nvidia.com/v1")
-ASR_NIM_TIMEOUT = 30
-```
-
-**System prompts:** `NIM_TRIAGE_PROMPT` (strict JSON schema + PRIVACY RULE block), `NIM_BRIEFING_PROMPT` (3-5 sentences), `NIM_HANDOFF_PROMPT` (4-6 sentence phone script)
-
-**`NIM_TRIAGE_PROMPT` privacy rule (added):** Opens with a block instructing the model to ignore personal identifiers (names, addresses, health conditions) even after PII scrubbing — defence in depth.
 
 ---
 
-### `backend/data_ingestion.py` — Dataset Loader
+### `backend/auth_store.py` — Auth (NEW)
 
-**Main entry:** `load_all(mode: EngineMode) -> (dict, float)`
+SQLite-backed caseworker auth sharing `logs/cases.db`.
 
-Returns `(datasets_dict, elapsed_ms)`. Called twice at startup: GPU first, CPU second for benchmark.
+**Schema:** `users(id, email UNIQUE, name, password_hash, role DEFAULT caseworker, created_at)`
 
-**Dataset keys:** `shelters`, `rehab`, `food`, `hygiene`, `grassroots`, `osm`, `stops`
+**CRITICAL DEPENDENCY NOTE:** `bcrypt==4.0.1` is pinned in `requirements.txt`. Do NOT upgrade.
+`passlib 1.7.4` is incompatible with `bcrypt >= 4.1` (the `__about__` attribute was removed).
+Upgrading bcrypt will cause all password operations to fail with an obscure error.
 
-**Load flow:**
-1. Attempt live CKAN fetch for shelters -> cache locally if coordinates present
-2. Fall back to local `shelters.csv` if CKAN unavailable or missing coordinates
-3. Load all other CSVs directly
-4. Load OSM JSON (wrapped in try-except -> empty DataFrame on failure)
-5. Load GTFS stops (stop_id, stop_name, lat, lon only)
-6. Standardize all lat/lon column names and cast to float32
-
-**Defensive column additions (all non-shelter datasets):**
+**Key methods:**
 ```python
-requires_id       -> default False
-harm_reduction    -> default True
-bypass_pathway    -> default ""
-intake_preparation -> default ""
-occupancy_ratio   -> default 0.5
+create_user(email, name, password) -> dict   # raises ValueError on duplicate email
+authenticate(email, password) -> dict | None  # returns user dict or None
+get_by_email(email) -> dict | None
+create_token(user) -> str                    # JWT, expires in 24h
+AuthStore.decode_token(token) -> dict | None # static method; returns payload or None
 ```
 
-**Column naming convention (IMPORTANT — Agent Rule 5):**
-- Shelters: UPPERCASE (ORGANIZATION_NAME, SHELTER_ADDRESS, SECTOR, LAT, LON, CAPACITY_ACTUAL_BED, UNOCCUPIED_BEDS, SERVICE_USER_COUNT)
-- All other datasets: lowercase (organization_name, address, lat, lon)
-- Do NOT rename shelter columns — CKAN returns them uppercase
+**JWT payload:** `{"sub": email, "name": name, "role": role, "exp": ...}`
 
-**Key helpers:**
-- `_fetch_shelters_ckan(pd_engine)` -> DataFrame or None
-- `_load_osm(pd_engine)` -> DataFrame (flattens OSM tags; try-except wrapping)
-- `_standardize_coords(df, lat_col, lon_col)` -> DataFrame (renames variants, casts float32)
+**Initialization:** Must be in `global` declaration of lifespan:
+```python
+global datasets_gpu, datasets_cpu, _rapids_mode, _telemetry_header_written, case_store, auth_store
+auth_store = AuthStore(str(CASE_DB_PATH))
+```
+Missing `auth_store` from the `global` statement means it stays `None` — every auth request returns 503.
+
+---
+
+### `backend/case_store.py` — SQLite Case History
+
+SQLite-backed case persistence at `logs/cases.db`. Uses Python built-in `sqlite3`.
+TF-IDF similarity via `sklearn.feature_extraction.text.TfidfVectorizer` (already in requirements).
+
+**Schema:** `cases(id, caseworker_id, client_name, created_at, transcript, needs_json, itinerary_json, ticket_text, outcome DEFAULT pending, outcome_notes, updated_at)`
+
+**WAL mode enabled** — safe for concurrent FastAPI requests.
+
+**Key methods:**
+```python
+save_case(caseworker_id, client_name, transcript, needs_payload, itinerary, ticket_text) -> case_id (8-char hex)
+get_history(caseworker_id, limit=30) -> list[dict]
+update_outcome(case_id, outcome, notes="") -> bool   # outcomes: pending|placed|declined|returned|referred_elsewhere
+find_similar(transcript, limit=3) -> list[dict]      # TF-IDF cosine over resolved cases only
+```
+
+**`find_similar()` detail:**
+- Only considers cases with `outcome != 'pending'` (resolved cases give signal)
+- Uses `TfidfVectorizer(stop_words='english', max_features=1000, sublinear_tf=True)`
+- Minimum similarity threshold: 0.08 to include
+- Returns each match with `similarity` (float) and `placed_at` (first shelter name from itinerary_json)
+- Returns `[]` silently on error — never raises
+
+**Returning client detection threshold:** `similarity >= 0.35` triggers `returning_hint` in route response.
+
+**Upgrade path:** Replace `find_similar()` with ChromaDB + sentence-transformers for dense-vector search in production.
 
 ---
 
 ### `backend/nim_compiler.py` — LLM Client
 
-**NeedsPayload (Pydantic model):**
+**NeedsPayload (Pydantic):**
 ```python
-needs_shelter:   bool
-needs_rehab:     bool
-needs_food:      bool
-needs_supplies:  bool
-needs_hygiene:   bool
-sector:          str   = "any"    # validated: youth|adult|family|any
-has_id:          bool | None = None
-sobriety_status: str  | None = None  # validated: sober|using|None
-group_size:      str  | None = None  # validated: alone|with_family|None
+needs_shelter, needs_rehab, needs_food, needs_supplies, needs_hygiene: bool
+needs_youth_service, needs_library, needs_respite: bool = False
+sector: str = "any"           # validated: youth|adult|family|any
+has_id: bool | None = None
+sobriety_status: str | None = None   # sober|using|None
+group_size: str | None = None        # alone|with_family|None
 ```
 
-**4-tier retry chain for `compile_needs(text)`:**
+**`compile_needs(text, similar_cases=None) -> (NeedsPayload, method, latency_ms)`:**
+
+4-tier chain:
 ```
-Tier 1: NVIDIA cloud NIM   https://integrate.api.nvidia.com/v1
-         Model: google/gemma-3n-e4b-it  Auth: NGC_API_KEY
-         (skipped if NGC_API_KEY not set)
-  ->
-Tier 2: local llama.cpp    http://localhost:30000/v1
-         Model: nemotron   Auth: NIM_API_KEY (default "not-needed")
-  ->
-Tier 3: local NIM container http://localhost:8001/v1
-         Model: google/gemma-3n-e4b-it  Auth: NIM_API_KEY
-  ->
-Tier 4: _regex_fallback(text) -- pure keywords, no network, always works
-Returns: (NeedsPayload, method="nim"|"regex", latency_ms)
+Tier 1: NVIDIA cloud NIM   (NGC_API_KEY required; fastest)
+Tier 2: llama.cpp :30000   (NIM_ENDPOINT; Nemotron-30B)
+Tier 3: NIM container :8001 (NIM_FALLBACK; Gemma 3n E4B)
+Tier 4: _regex_fallback()   (pure keywords; always works; no network)
 ```
 
-**`_nim_tiers()`** — builds the tier list at call time from env vars. Cloud tier only included if `NGC_API_KEY` is set. `generate_briefing` and `generate_handoff_script` use the same tier list.
+**RAG context injection:**
+`_build_triage_user_message(text, similar_cases)` prepends resolved past cases as LLM context:
+```
+[CONTEXT: Similar resolved cases — use to calibrate sector and needs extraction]
+• "male no id needs shelter cold..." → Seaton House | outcome: placed
+• "woman with children urgent..." → Dixon Hall Family | outcome: placed
 
-**`_call_nim(text, endpoint, system_prompt, model=None, api_key="not-needed")`:**
-- OpenAI-compatible client; model and api_key per-tier
-- Strips markdown fences before JSON parse
-- temperature=0.0 for triage (deterministic), 0.3-0.4 for briefing/handoff
+[CURRENT CLIENT NOTES]
+<text>
+```
+This improves sector detection and needs extraction by showing the LLM patterns from this caseworker's caseload.
 
-**About Gemma 3n E4B (NVFP4):**
-- Google's Gemma 3 "nano" Effective 4B model — 4B active parameters per step
-- NVFP4 = NVIDIA's 4-bit float, runs natively on Blackwell (GX10)
-- Faster than Nemotron-30B, smaller footprint — leaves more of 128 GB for cuDF/cuML
-- Strong structured JSON output — ideal for the 9-field triage schema
-- NIM Docker image: `nvcr.io/nim/google/gemma-3n-e4b-it:latest`
+**`_check_grounding(script, facility_name)`:** Post-generation guard on handoff scripts. Verifies the script mentions the actual facility name. Appends correction if missing. Never raises.
 
-**`_regex_fallback(text)`:** Pure keyword matching, no network dependency. Always returns valid NeedsPayload.
-
-**`generate_briefing(shelter_summary)`** and **`generate_handoff_script(facility_name, payload)`:**
-Both try NIM_ENDPOINT -> NIM_FALLBACK -> static placeholder text.
+**`compile_needs_async(text, similar_cases=None)`:** Async wrapper via `asyncio.to_thread`.
 
 ---
 
 ### `backend/solver.py` — Constraint-Aware KNN
 
-**Main entry:** `solve(payload, datasets, origin, mode) -> (itinerary_dict, elapsed_ms)`
+**`solve(payload, datasets, origin, mode) -> (itinerary_dict, elapsed_ms)`**
 
-**Algorithm:**
-1. `_apply_masks(payload, datasets, pd_engine)` -> filtered dataset dict
-2. For each pillar: run KNN (k = min(9, dataset_size), haversine metric, brute force)
-3. `_score_and_rank(df, indices, distances_km, stops_df, pillar_name)` -> sorted results
-4. Return top `KNN_RESULTS_PER_PILLAR` (3) per pillar
+**Scoring formula:** `composite_score = 0.60 × dist_norm + 0.30 × occupancy + 0.10 × transit_binary`
+Lower is better. Closed facilities get +2.0 penalty (sink not hide).
 
-**Scoring formula:**
-```
-composite_score = (0.60 x dist_norm) + (0.30 x occupancy_ratio) + (0.10 x transit_binary)
-```
-- `dist_norm` = distance_km / max_distance_in_candidates (0.0-1.0)
-- `occupancy_ratio` = SERVICE_USER_COUNT / CAPACITY (shelters); 0.5 default (others)
-- `transit_binary` = 0.0 if TTC stop within 200m, 1.0 if not
-- **Lower score = better** (sorted ascending)
+**Pillar merging:**
+- `food` = food_banks + grassroots
+- `hygiene` = hygiene_stations + osm
 
-**Eligibility masking (`elig(df)`):**
-```python
-m_id  = (df["requires_id"] == False) if (has_id is False and col exists) else True
-m_sob = (df["harm_reduction"] == True) if (sobriety_status=="using" and col exists) else True
-return m_id & m_sob
-```
-Note: `has_id=None` passes all facilities through (optimistic — known remaining issue).
-
-**Shelter-specific masking:**
-- Filters `UNOCCUPIED_BEDS > 0`
-- Filters by sector: youth/adult/family/any (via sector_map)
-- Filters by `group_size == "with_family"` -> Families sector only
-
-**Pillar dataset merging:**
-- `food`: food_banks + grassroots concatenated
-- `hygiene`: hygiene_stations + osm concatenated
-
-**Transit check (`_check_transit`):**
-- Bounding-box: `lat_deg = 200/111_000`, `lon_deg = 200/80_000` (Toronto ~80 km/degree lon)
-- Returns True if any GTFS stop within box; silent False on exception
-
-**Result dict per facility:**
+**Result fields per facility:**
 ```
 pillar, name, address, lat, lon, distance_km, distance_walk_min,
-occupancy_ratio, transit_accessible, composite_score,
-phone, hours, requires_id, harm_reduction,
-bypass_pathway, intake_preparation, accessible
+occupancy_ratio, transit_accessible, composite_score, open_now,
+phone, hours, requires_id, harm_reduction, bypass_pathway,
+intake_preparation, accessible
 ```
 
----
-
-### `backend/voice_session.py` — Session & Voice Logic
-
-**VoiceSession dataclass:**
-```python
-session_id:          str   (UUID[:8])
-created_at:          float (Unix timestamp)
-payload_draft:       NeedsPayload | None
-eligibility_answers: dict
-questions_asked:     list
-origin:              tuple(lat, lon) | None
-```
-
-**In-memory store:** `_sessions: dict[str, VoiceSession]` — expires after 120s
-
-**Key functions:**
-
-| Function | Purpose |
-|----------|---------|
-| `create_session(payload, origin)` | Creates and stores session |
-| `get_session(session_id)` | Runs _cleanup_expired(), returns session or None |
-| `resolve_eligibility_questions(payload)` | Returns up to 3 TTS-ready question strings |
-| `parse_eligibility_answer(question, answer)` | Keyword -> {field: value} — imported but NOT called by main.py; frontend mirrors this logic |
-| `clean_transcript(raw)` | Removes fillers, validates >= 10 chars, calls `redact_pii()`, raises ValueError if too short |
-| `build_tts_itinerary_script(itinerary, client_name)` | Warm spoken script: "First, go to…", "Next…", "I hope this helps." |
-| `_cleanup_expired()` | Removes sessions older than VOICE_SESSION_IDLE_SEC |
-
----
-
-### `backend/pii_scrubber.py` — PII Redaction + Injection Detection (new)
-
-Two public functions, no external dependencies beyond `re`.
-
-**`redact_pii(text: str) -> tuple[str, int, list[str]]`**
-
-Regex patterns for Canadian PII:
-
-| Pattern | What it catches |
-|---------|----------------|
-| `phone` | North American phone numbers (various formats) |
-| `email` | Email addresses |
-| `sin` | Social Insurance Numbers (3-3-3 digit format) |
-| `health_card` | Ontario OHIP numbers (4-3-3 format + version code) |
-| `postal_code` | Canadian postal codes (A1A 1A1) |
-| `date` | Numeric dates (DD/MM/YYYY, YYYY-MM-DD) |
-
-Returns `(redacted_text, count, list_of_types)`. Replaces matches with `[REDACTED]`. Called by `clean_transcript()` before any LLM sees the text.
-
-**`has_injection(text: str) -> bool`**
-
-Detects prompt injection patterns (7 patterns: "ignore previous instructions", "you are now a different AI", jailbreak markers, etc.). Called only on Gateway A (caseworker route) — not kiosk.
-
----
-
-### `backend/guardrails_client.py` — NeMo Guardrails (new)
-
-**`init_guardrails() -> bool`** — Called at startup in lifespan. Loads `guardrails/config.yml` + `guardrails/rails.co`. Injects a `PassthroughLLM` as the NeMo backend so inputs that pass all rails return `__PASS__` instantly (zero network overhead). Returns False and logs `"disabled"` if `GUARDRAILS_ENABLED` not set or `nemoguardrails` not installed.
-
-**`async check_input(text: str) -> tuple[bool, str]`** — Called on both caseworker and kiosk routes after `clean_transcript()`. Returns `(True, "ok")` for safe inputs, `(False, "blocked")` for rails violations. Never raises — fail-open `(True, "unavailable")` on any error.
-
-**Rail definitions (`guardrails/rails.co`, colang 1.0):**
-- `check jailbreak` — blocks "ignore previous instructions", "you are now a different AI", etc.
-- `check harmful request` — blocks "how to get drugs illegally", "how to hurt myself", etc.
-
-**Refusal messages** are defined in the colang file and cross-checked in `check_input()` by substring match. Enable via `GUARDRAILS_ENABLED=1`.
+**`is_open_now(hours_str)`:** Parses `"24/7"`, `"Mon-Fri 9am-5pm"`, `"Daily HH:MM-HH:MM"` etc. Fails open (True) for blank/unparseable — never penalizes missing data.
 
 ---
 
@@ -376,51 +313,127 @@ Detects prompt injection patterns (7 patterns: "ignore previous instructions", "
 
 **Global state:**
 ```python
-datasets_gpu: dict  # GPU or CPU-backed (depends on _rapids_mode)
-datasets_cpu: dict  # Always CPU-backed
-_last_benchmark: dict = {"gpu_ms": None, "cpu_ms": None}
-_rapids_mode: str = "cpu"  # "gpu" if RAPIDS loaded
+datasets_gpu: dict          # GPU-backed (or CPU fallback)
+datasets_cpu: dict          # Always CPU
+_last_benchmark: dict       = {"gpu_ms": None, "cpu_ms": None}
+_rapids_mode: str           = "cpu"
+_telemetry_header_written: bool = False
+case_store: CaseStore | None = None
+auth_store: AuthStore | None = None   # NEW — must be in global declaration
 ```
 
-**Lifespan hook:** GPU load -> CPU load -> start `_session_gc()` asyncio task (60s interval)
+**Lifespan startup order:**
+1. `case_store = CaseStore(...)` + `auth_store = AuthStore(...)` (same `cases.db`)
+2. GPU load → CPU load (fallback if GPU unavailable)
+3. `init_guardrails()`
+4. `fetch_weather_alert()`
+5. Start `_session_gc()` + `_hydration_loop()` asyncio tasks
 
-**CORS:** `os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")` — GET+POST, Content-Type only
-
-**Lifespan hook:** GPU load → CPU load → `init_guardrails()` → `fetch_weather_alert()` → start `_session_gc()` + `_hydration_loop()` asyncio tasks.
-
-**Request models with validation:**
+**Request models:**
 ```python
-CaseworkerRouteRequest: text=Field(..., max_length=5000),
-                        origin_lat=Field(43.6532, ge=-90, le=90),
-                        origin_lon=Field(-79.3832, ge=-180, le=180),
-                        client_name=Field(None, max_length=100)
-KioskSessionRequest:    transcript=Field(..., max_length=2000),
-                        origin_lat, origin_lon
-KioskRouteRequest:      session_id, eligibility_answers: dict
-BriefingRequest:        current_time_iso
-HandoffRequest:         facility_name, facility_phone, payload: NeedsPayload
+CaseworkerRouteRequest:   text(max 5000), origin_lat, origin_lon,
+                          client_name(optional), caseworker_id(optional)
+AuthRegisterRequest:      email(max 120), name(min 1), password(min 6, max 128)
+AuthLoginRequest:         email, password
+OutcomeUpdateRequest:     outcome(pattern: pending|placed|declined|returned|referred_elsewhere),
+                          notes(max 500)
 ```
 
-**Endpoints:**
+**`_cw_id_from_request(request, fallback)`:** Extracts caseworker identity from JWT Bearer token if present, else uses provided `caseworker_id` field. JWT email takes priority — backward compatible.
 
-| Method | Path | What it does |
-|--------|------|--------------|
-| GET | `/api/v1/health` | Status, rapids_mode, NIM_ENDPOINT, dataset row counts, **nemo_guardrails** status |
-| GET | `/api/v1/benchmark` | Last GPU/CPU solve times and speedup ratio |
-| GET | `/api/v1/system` | Live GPU utilization via pynvml (GX10) |
-| GET | `/api/v1/telemetry/summary` | Shadow Census aggregate stats from daily_telemetry.csv |
-| POST | `/api/v1/transcribe` | **NEW** — audio blob → Parakeet ASR NIM → transcript text (3-tier: local→cloud→503) |
-| POST | `/api/v1/caseworker/route` | PII scrub → injection check → NeMo Guardrails → NeedsPayload → GPU+CPU solve → itinerary |
-| POST | `/api/v1/kiosk/session` | PII scrub → NeMo Guardrails → NeedsPayload → session + eligibility questions |
-| POST | `/api/v1/kiosk/route` | Session + answers → merged payload → solve → itinerary |
-| POST | `/api/v1/caseworker/briefing` | Shelter stats → NIM summary → briefing text |
-| POST | `/api/v1/handoff-script` | Facility + payload → NIM phone script |
+**Safety pipeline on caseworker route (in order):**
+1. `clean_transcript()` → `redact_pii()` (phone, email, SIN, OHIP, postal, dates)
+2. `has_injection()` → HTTP 400 if triggered
+3. `guardrails_check()` → HTTP 400 if triggered
+4. `is_crisis()` → HTTP 200 with `crisis:True` + escalation (short-circuits LLM)
+5. `case_store.find_similar(cleaned, limit=3)` → build `similar_cases` + `returning_hint`
+6. `compile_needs_async(cleaned, similar_cases)` → `NeedsPayload`
+7. `solve()` GPU + CPU in parallel
+8. `case_store.save_case(...)` → `case_id` returned in response
 
-**Safety pipeline on caseworker route** (in order):
-1. `clean_transcript()` — filler removal + `redact_pii()` (phone, email, SIN, OHIP, postal, date)
-2. `has_injection()` — regex injection detection → HTTP 400 if triggered
-3. `guardrails_check()` — NeMo Guardrails colang rail check → HTTP 400 if triggered
-4. `compile_needs_async()` — LLM triage with PRIVACY RULE prompt
+**All endpoints:**
+
+| Method | Path | Auth | What it does |
+|--------|------|------|--------------|
+| POST | `/api/v1/auth/register` | None | Create account → JWT |
+| POST | `/api/v1/auth/login` | None | Email+password → JWT |
+| GET | `/api/v1/auth/me` | Bearer | Verify token → user info |
+| GET | `/api/v1/health` | None | Status, mode, dataset counts, guardrails |
+| GET | `/api/v1/benchmark` | None | Last GPU/CPU solve times |
+| GET | `/api/v1/system` | None | Live GPU utilization (pynvml) |
+| GET | `/api/v1/capacity` | None | Bed counts + occupancy% from shelters dataset |
+| GET | `/api/v1/telemetry/summary` | None | Shadow Census CSV aggregate stats |
+| POST | `/api/v1/transcribe` | None | Audio blob → Parakeet ASR NIM → transcript |
+| POST | `/api/v1/caseworker/route` | Optional JWT | Full routing pipeline; saves case if authed |
+| GET | `/api/v1/caseworker/{id}/history` | None | Past cases for caseworker |
+| PATCH | `/api/v1/case/{id}/outcome` | None | Mark outcome: placed/declined/returned/etc. |
+| POST | `/api/v1/kiosk/session` | None | Voice transcript → NeedsPayload + session |
+| POST | `/api/v1/kiosk/route` | None | Session + eligibility → itinerary |
+| POST | `/api/v1/caseworker/briefing` | None | Shelter stats → LLM briefing text |
+| POST | `/api/v1/handoff-script` | None | Facility + payload → phone script |
+
+**`caseworker/route` response (full shape):**
+```json
+{
+  "crisis": false,
+  "payload": { ...NeedsPayload... },
+  "compile_method": "nim|regex|crisis_gate",
+  "nim_latency_ms": 234.1,
+  "gpu_solve_ms": 8.3,
+  "cpu_solve_ms": 401.2,
+  "speedup": 48.3,
+  "itinerary": { "shelter": [...], "food": [...] },
+  "ticket_text": "First, go to...",
+  "eligibility_questions": [],
+  "case_id": "f2cbb754",
+  "returning_hint": {
+    "case_id": "abc12345",
+    "last_seen": "2026-05-28",
+    "placed_at": "Seaton House",
+    "outcome": "placed",
+    "similarity": 0.72,
+    "client_name": "John"
+  }
+}
+```
+`returning_hint` is `null` if no similar resolved case with similarity >= 0.35.
+
+---
+
+### `backend/crisis_gate.py` — Deterministic Crisis Detection
+
+Runs BEFORE any LLM call. No network dependency. High recall over precision.
+
+Pattern groups: `mental_health` → 988, `medical/violence` → 911.
+
+**Integration:** Called after guardrails, before `compile_needs()` on both gateways.
+
+---
+
+### `backend/pii_scrubber.py` — PII Redaction + Injection Detection
+
+**`redact_pii(text)`:** Replaces Canadian PII (phone, email, SIN, OHIP, postal, dates) with `[REDACTED]`.
+**`has_injection(text)`:** Detects 7 prompt injection patterns. Gateway A only.
+
+---
+
+### `backend/voice_session.py` — Kiosk Session Logic
+
+**In-memory store** — sessions expire after 120s.
+
+Key functions: `create_session`, `get_session`, `clean_transcript`, `build_tts_itinerary_script`, `resolve_eligibility_questions`.
+
+`clean_transcript()` calls `redact_pii()` before any LLM sees text.
+
+---
+
+### `backend/case_store.py` — See §2 (CaseStore section above)
+
+### `backend/auth_store.py` — See §2 (AuthStore section above)
+
+### `backend/guardrails_client.py` — NeMo Guardrails
+
+`GUARDRAILS_ENABLED=1` env var required to enable. Fail-open on error. `PassthroughLLM` — zero inference overhead.
 
 ---
 
@@ -428,69 +441,175 @@ HandoffRequest:         facility_name, facility_phone, payload: NeedsPayload
 
 ### `frontend/src/config.ts`
 
-Voice constants mirrored from `backend/config.py` — must sync manually if either changes:
 ```typescript
-VOICE_HOLD_MAX_MS      = 45_000
-VOICE_SILENCE_KILL_MS  = 10_000
-VOICE_SESSION_IDLE_MS  = 120_000
-VOICE_MIN_CHARS        = 10       // used in KioskPage transcript validation
-API_BASE               = '/api/v1'
-KIOSK_DEFAULT_HUB      = import.meta.env.VITE_KIOSK_HUB ?? 'Union Station'
+VOICE_HOLD_MAX_MS     = 45_000
+VOICE_SILENCE_KILL_MS = 2_500   // CHANGED from 10_000 — natural 2.5s pause
+VOICE_SESSION_IDLE_MS = 120_000
+VOICE_MIN_CHARS       = 10
+API_BASE              = '/api/v1'
+KIOSK_HUBS            // 12 locations matching backend config.py
+KIOSK_DEFAULT_HUB     = import.meta.env.VITE_KIOSK_HUB || ''  // empty = always show picker
 ```
 
 ### `frontend/src/types/api.ts`
 
-All API shapes. Import from here — never inline types.
+All API shapes — import from here only.
 
-Key types: `NeedsPayload`, `ItineraryResult`, `Itinerary = Record<string, ItineraryResult[]>`, all request/response models.
+**New types added (Session 10):**
+```typescript
+CaseOutcome = 'pending' | 'placed' | 'declined' | 'returned' | 'referred_elsewhere'
 
-`CaseworkerRouteResponse` includes `compile_method: 'nim'|'regex'` and latency fields.
-`KioskSessionResponse` includes `next_step: 'collect_eligibility'|'route'`.
+CaseRecord {
+  id, caseworker_id, client_name, created_at, transcript,
+  needs: NeedsPayload | null,
+  itinerary: Itinerary | null,
+  ticket_text, outcome: CaseOutcome, outcome_notes, updated_at
+}
+
+ReturningClientHint { case_id, last_seen, placed_at, outcome, similarity, client_name }
+CapacityResponse    { total_beds, available_beds, occupied_beds, occupancy_pct }
+AuthUser            { email, name, role }
+AuthResponse        { token, user: AuthUser }
+CaseworkerHistoryResponse { cases: CaseRecord[], total }
+OutcomeUpdateRequest { outcome: CaseOutcome, notes? }
+```
+
+`CaseworkerRouteResponse` now includes `case_id?: string` and `returning_hint?: ReturningClientHint`.
+
+### `frontend/src/context/AuthContext.tsx` (NEW)
+
+React context providing `{ user, token, loading, login, register, logout }`.
+
+- On mount: reads `haven_auth_token` from localStorage → validates via `GET /auth/me` → restores session or clears on expired/invalid token
+- `login()` / `register()` → POST to backend → `applyToken()` sets axios default `Authorization: Bearer <token>` header + localStorage
+- `logout()` clears both
+- `loading: true` while validating stored token — `ProtectedCaseworker` in App.tsx shows spinner during this
+
+### `frontend/src/components/Auth/LoginPage.tsx` (NEW)
+
+Tabbed Sign In / Create Account form. Matches project's dark teal design language.
+
+- Tab: `login` → email + password
+- Tab: `register` → email + name + password
+- On success → `navigate('/caseworker', { replace: true })`
+- Error display for duplicate email (409), wrong credentials (401), server errors
+
+### `frontend/src/App.tsx`
+
+```tsx
+<AuthProvider>
+  <BrowserRouter>
+    <Routes>
+      <Route path="/login"      element={<LoginPage />} />
+      <Route path="/caseworker" element={<ProtectedCaseworker />} />  // redirects to /login if no auth
+      <Route path="/kiosk"      element={<KioskPage />} />             // always public
+      <Route path="*"           element={<Navigate to="/caseworker" />} />
+    </Routes>
+  </BrowserRouter>
+</AuthProvider>
+```
+
+`ProtectedCaseworker`: shows spinner while auth loading, redirects to `/login` if no user.
+
+### `frontend/src/api/client.ts`
+
+Axios instance at `/api/v1`. The `Authorization: Bearer <token>` header is set by `AuthContext.applyToken()` on `api.defaults.headers.common`. All subsequent requests carry it automatically.
 
 ### `frontend/src/components/GatewayA/CaseworkerPage.tsx`
 
-State machine: `idle -> compiled -> confirmed -> routed`
+State machine: `idle → compiled → confirmed → routed | crisis`
 
-Origin hardcoded to `(43.6532, -79.3832)` (downtown Toronto — known remaining issue).
+**Identity:** `caseworker_id = user?.email` (from `useAuth()` — JWT). The old localStorage name input is removed. Caseworker name shown in header alongside Sign Out button.
 
-Sub-components: VoiceInput, PayloadConfirm, Itinerary, Ticket, HandoffScript, ShiftBriefing, BenchmarkPanel.
+**New visual elements:**
+- `<CapacityTicker />` in header (live bed count + occupancy bar)
+- Returning client hint banner (purple) rendered if `routeResult.returning_hint` present
+- `<RouteMap />` above itinerary results (collapsible Leaflet map)
+- `<CaseworkerHistory />` below ShiftBriefing (collapsible past cases panel)
+
+**Origin still hardcoded:** `originLat = 43.6532, originLon = -79.3832` — known remaining issue.
+
+### `frontend/src/components/GatewayA/CaseworkerHistory.tsx` (NEW)
+
+Collapsible panel. Polls `GET /caseworker/{caseworker_id}/history` on mount and after each new route (`refreshTrigger` prop increment).
+
+Per case row: client name, date, need icons (🏠🍽🚿💊🛋), first placement, outcome badge.
+Expanded detail: transcript excerpt, itinerary summary, outcome update buttons (Placed / Declined / Returned / Referred Elsewhere).
+
+### `frontend/src/components/GatewayA/RouteMap.tsx` (NEW)
+
+Leaflet map, lazy-loaded via dynamic `import('leaflet')` (zero bundle cost until first open).
+Leaflet CSS loaded via `@import 'leaflet/dist/leaflet.css'` in `index.css`.
+
+- Origin marker: white circle with teal ring
+- Per-pillar colored markers: shelter=#1A7A9A, rehab=#3A8A71, food=#D97706, hygiene=#506170, respite=#7C3AED, youth=#0891B2, libraries=#B45309
+- First result per pillar = larger pin (14px); others = smaller (10px)
+- Click popup: pillar, name, address, phone, walk time, occupancy
+- `map.fitBounds()` to show all markers + origin
+- Cleanup: `map.remove()` on unmount prevents memory leaks
+
+### `frontend/src/components/GatewayA/CapacityTicker.tsx` (NEW)
+
+Polls `GET /api/v1/capacity` every 60s. Silent on error (backend may not be up yet).
+
+Displays in header: animated pulse dot (green/amber/red by pressure) + occupancy bar + % + beds-free + last-updated time.
+
+Thresholds: `pct >= 97` = Critical (red), `pct >= 93` = High pressure (amber), else Normal (green).
 
 ### `frontend/src/components/shared/useSpeech.ts`
 
-**TTS:** `pitch=0.85` (calmer), preferred voice list: `Google UK English Female → Samantha → Karen → Moira → Google US English`. Falls back to system default.
+**Key changes from Session 10:**
 
-**Dual recording (new):** `startRecording()` uses `MediaRecorder` with 250ms timeslice. `stopRecording()` returns `Promise<Blob | null>` — waits for `onstop` to capture final chunk. `transcribeAudio(blob)` POSTs to `/api/v1/transcribe` and returns the ASR transcript string or null.
+```typescript
+// STT language: en-IN (Indian English — handles Indian accents better than en-US)
+sr.lang = 'en-IN';
 
-### `frontend/src/components/GatewayB/VoiceOrb.tsx`
+// TTS: stays en-US (en-IN TTS voices rarely installed)
+utt.lang = 'en-US';
 
-**Tap-to-toggle (changed from hold-to-release).** Props: `{ state, onClick }` (was `onPointerDown`/`onPointerUp`). Labels: `"Tap to speak"` (idle), `"Tap when done"` (listening).
+// Continuous mode auto-restart:
+// wantListeningRef tracks whether caller still wants listening
+// If Chrome terminates recognition (network blip, ~60s timeout),
+// onend checks wantListeningRef and rebuilds+restarts the recognizer
+// finalTextRef accumulates confirmed-final text across restarts
+
+// Proper result accumulation:
+// Uses e.resultIndex to process only new results
+// Separates final (isFinal=true) from interim
+// finalTextRef += final text; setTranscript(finalTextRef + currentInterim)
+
+// Audio constraints on getUserMedia (for MediaRecorder / Parakeet NIM):
+audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+
+// TTS voice cache:
+// voiceschanged event fires once when browser loads voices
+// cachedVoices module-level array populated via event listener
+// speak() uses cachedVoices instead of getVoices() (which returns [] on first call)
+
+// Listening state accuracy:
+// isListening set to true in sr.onstart (not before sr.start())
+// Avoids "listening" UI during ~300ms startup gap
+```
+
+**`startListening(continuous = false)`:**
+- `continuous=false` for hold-to-speak (VoiceInput) and eligibility questions (EligibilityFlow)
+- `continuous=true` for kiosk main recording (KioskPage) — enables auto-restart
 
 ### `frontend/src/components/GatewayB/KioskPage.tsx`
 
-State machine: `idle -> recording -> processing -> eligibility -> routing -> speaking -> done`
+State machine: `idle → hub_select → recording → processing → [crisis|eligibility|routing|speaking|done]`
 
-Accessibility rule: No text input or form elements. Only VoiceOrb is focusable.
+Text fallback (`typing` state): full-screen textarea, 1.2rem font, autoFocus.
 
-**New interaction model (tap-to-toggle):**
-- First tap: `startListening()` (Web Speech for live transcript display) + `startRecording()` (MediaRecorder for ASR NIM)
-- Second tap: `stopListening()` + await `stopRecording()` → `transcribeAudio(blob)` → if null fall back to Web Speech `transcript`
-- Live transcript shows below orb during `recording` and `processing` states
-
-**Warmer spoken text (all messages updated):** "Welcome. I'm here to help you find shelter, food, or care…", "I'm sorry, I didn't catch that…", etc.
+Hub selector: always shows on first load (KIOSK_DEFAULT_HUB is empty by default).
 
 ### `frontend/src/components/GatewayB/EligibilityFlow.tsx`
 
-State machine: `speaking_question -> waiting_for_answer -> complete`
+Uses `startListening(false)` — non-continuous (short yes/no answers).
 
-Speaks 1-3 questions via TTS, listens for voice answers, calls `onComplete(answers)`.
+### `frontend/src/components/GatewayA/Itinerary.tsx`
 
-**Tap to submit early (new):** VoiceOrb `onClick` calls `advanceOrComplete(idx, transcript)` when in `waiting_for_answer` state. Auto-submit on transcript > 3 chars and 30s timeout still work as fallback.
-
-`parseAnswer(question, answer)` — mirrors `backend/voice_session.py::parse_eligibility_answer()` logic.
-
-### `frontend/src/components/GatewayA/PayloadConfirm.tsx`
-
-5-second countdown auto-submits. `submitted = useRef(false)` prevents `onConfirm` double-fire.
+Unchanged. Picks up any new pillar keys automatically from the itinerary dict.
 
 ---
 
@@ -498,193 +617,250 @@ Speaks 1-3 questions via TTS, listens for voice answers, calls `onComplete(answe
 
 Location: `data/` (relative to project root)
 
-| File | Size | Records | Key Columns |
-|------|------|---------|-------------|
-| `shelters.csv` | ~63 KB | ~50 | ORGANIZATION_NAME, SHELTER_ADDRESS, SECTOR, SERVICE_USER_COUNT, CAPACITY_ACTUAL_BED, UNOCCUPIED_BEDS, LAT, LON, requires_id, harm_reduction |
-| `rehab_services.csv` | ~8 KB | ~25 | organization_name, address, lat, lon, requires_id, harm_reduction, bypass_pathway, intake_preparation |
-| `food_banks.csv` | ~4 KB | ~15 | organization_name, address, lat, lon, phone, hours |
-| `grassroots_services.csv` | ~5 KB | ~15 | organization_name, address, lat, lon, service_type |
-| `hygiene_stations.csv` | ~4 KB | ~10 | organization_name, address, lat, lon, has_showers, has_laundry, has_winter_clothing |
-| `osm_amenities.json` | ~15 KB | ~50+ | elements[].{id, lat, lon, tags.{name, amenity}} |
-| `stops.txt` | ~675 KB | ~9,300 | stop_id, stop_name, stop_lat, stop_lon |
+| File | Records | Key columns | Notes |
+|------|---------|-------------|-------|
+| `shelters.csv` | ~290 | ORGANIZATION_NAME, SHELTER_ADDRESS, SECTOR, LAT, LON, CAPACITY_ACTUAL_BED, UNOCCUPIED_BEDS, SERVICE_USER_COUNT, requires_id, harm_reduction | UPPERCASE — CKAN format. Do NOT rename. |
+| `rehab_services.csv` | ~25 | organization_name, address, lat, lon, requires_id, harm_reduction, bypass_pathway, intake_preparation | |
+| `food_banks.csv` | ~20 | organization_name, address, lat, lon, phone, hours | |
+| `grassroots_services.csv` | ~20 | organization_name, address, lat, lon, service_type | |
+| `hygiene_stations.csv` | **817** | organization_name, address, lat, lon, has_showers, has_laundry, has_winter_clothing, hours, phone, requires_id, harm_reduction, bypass_pathway, intake_preparation | 15 curated + 798 drinking fountains + 4 public washrooms from EDA |
+| `respite_sites.csv` | **1,599** | organization_name, address, lat, lon, hours, phone, pet_friendly, wheelchair_accessible, storage_available, requires_id, harm_reduction, bypass_pathway, intake_preparation, occupancy_ratio, sector | 15 curated + 1,407 places of worship + 177 cooling centres from EDA |
+| `youth_spaces.csv` | ~20 | organization_name, address, lat, lon | |
+| `libraries.csv` | ~20 | organization_name, address, lat, lon | |
+| `osm_amenities.json` | ~55 | elements[].{id, lat, lon, tags.{name, amenity}} | |
+| `stops.txt` | ~9,368 | stop_id, stop_name, stop_lat, stop_lon | GTFS format |
 
-Critical convention: shelters use UPPERCASE column names (CKAN format). Do not rename. All other CSVs use lowercase.
+**CRITICAL:** Shelter CSV uses UPPERCASE column names (CKAN format). All other datasets use lowercase. Never rename shelter columns — `solver.py` and `data_ingestion.py` reference them explicitly.
+
+**EDA data source:** `EDA/data/processed/` contains parquets that fed the dataset expansions:
+- `processed_places_of_worship.parquet` (1,407 rows, `lon`/`lat` columns)
+- `processed_cooling_centres.parquet` (177 rows)
+- `processed_fountains.parquet` (798 rows)
+- `processed_washrooms.parquet` (4 rows)
+- `shelter_daily.parquet` — occupancy time series (1,893 days)
+- `weather_daily.parquet` — daily weather (temp, precip, snow)
+- `shelter_locations.parquet` — 107 geocoded shelter locations
+
+**EDA `.gitignore`** (`EDA/.gitignore`): excludes `.venv/` (660 MB), `.antigravitycli/`, `data/raw/shelter__daily-*.csv` (13-15 MB each), `data/raw/*.csv.csv` (accidental duplicate downloads).
 
 ---
 
 ## 5. Complete Data Flows
 
-### Caseworker Flow (Gateway A)
+### Caseworker Flow (Gateway A) — Full Pipeline
 
 ```
-1. Caseworker speaks or pastes text
-2. CaseworkerPage.handleTextSubmit(text)
-   -> POST /api/v1/caseworker/route {text, origin_lat, origin_lon}
-3. Backend: clean_transcript() -> compile_needs() [NIM -> regex fallback]
-4. solve(datasets_gpu, GPU_MODE) + solve(datasets_cpu, CPU_MODE) [CPU in async executor]
-5. Response: {payload, compile_method, latencies, itinerary, ticket_text}
-6. Frontend: PayloadConfirm shown (5s countdown -> auto-submit, or edit)
-7. handleConfirm(edited_payload):
-   - If payload changed -> re-POST /caseworker/route
-   - Else -> use existing result
-8. Renders: ItineraryView (top 3 per pillar) + Ticket + HandoffScript modal
+1. User visits /caseworker → ProtectedCaseworker checks auth
+   → if no token: redirect to /login
+   → if token present: validate via GET /auth/me → restore session
+
+2. Login/Register → POST /auth/login or /auth/register
+   → JWT stored in localStorage('haven_auth_token')
+   → axios default header set: Authorization: Bearer <token>
+
+3. CapacityTicker polls GET /capacity every 60s → shows bed count in header
+
+4. Caseworker enters client notes (voice or text)
+   → POST /api/v1/caseworker/route {text, origin_lat, origin_lon, caseworker_id from JWT}
+
+5. Backend pipeline:
+   a. _cw_id_from_request() extracts email from JWT
+   b. clean_transcript() → redact_pii()
+   c. has_injection() → block if triggered
+   d. guardrails_check() → block if triggered
+   e. is_crisis() → return crisis response if triggered
+   f. case_store.find_similar(cleaned) → similar_cases + returning_hint (if score >= 0.35)
+   g. compile_needs_async(cleaned, similar_cases) → NeedsPayload + method + latency
+   h. solve() GPU + CPU parallel
+   i. case_store.save_case() → case_id stored in logs/cases.db
+   j. Return itinerary + case_id + returning_hint
+
+6. Frontend:
+   a. If returning_hint present: purple banner shown
+   b. PayloadConfirm shown (5s countdown → auto-submit)
+   c. On confirm: RouteMap (Leaflet) + ItineraryView + Ticket rendered
+   d. CaseworkerHistory refreshed (historyRefresh incremented)
+   e. Caseworker can mark outcome → PATCH /case/{id}/outcome
 ```
 
 ### Kiosk Flow (Gateway B)
 
 ```
-1. Public holds VoiceOrb -> startListening
-2. Release orb -> stopListening -> validate transcript (>=10 chars)
-3. POST /api/v1/kiosk/session {transcript, origin_lat, origin_lon}
-4. Backend: compile_needs() -> create_session() -> resolve_eligibility_questions()
-5. Response: {session_id, payload_draft, eligibility_questions, next_step}
-6. If next_step="collect_eligibility":
-   - EligibilityFlow speaks questions via TTS
-   - Each: startListening -> transcript -> parseAnswer() -> advance
-   - onComplete(answers) -> KioskPage.submitRoute(session_id, answers)
-7. POST /api/v1/kiosk/route {session_id, eligibility_answers}
-8. Backend: merge payload_draft + answers -> solve() -> build_tts_itinerary_script()
-9. Response: {itinerary, tts_script, gpu_solve_ms}
-10. KioskItinerary: speaks TTS script -> shows facility cards
-11. After VOICE_SESSION_IDLE_MS (120s): resets to idle
+1. Hub selector shown (no auth required)
+2. User taps VoiceOrb → startListening(continuous=true) + startRecording()
+3. Second tap → stopListening() + stopRecording()
+4. transcribeAudio(blob) → POST /api/v1/transcribe (tries Parakeet NIM)
+   → if fails: use Web Speech transcript as fallback
+5. POST /kiosk/session → NeedsPayload + session_id + eligibility_questions
+6. EligibilityFlow: TTS questions → Web Speech answers → onComplete(answers)
+7. POST /kiosk/route → itinerary + tts_script
+8. Kiosk speaks tts_script → shows facility cards
+9. Auto-reset after 120s idle
 ```
 
-### Briefing Flow
+### Auth Flow
 
 ```
-1. POST /api/v1/caseworker/briefing {current_time_iso}
-2. Backend: compute total_beds, available_beds, by_sector from shelters dataset
-3. generate_briefing(summary) -> NIM -> fallback placeholder
-4. Response: {briefing_text, shelter_snapshot: {total_beds, available_beds}}
-```
-
-### Handoff Script Flow
-
-```
-1. Caseworker clicks "Call" on an itinerary result
-2. HandoffScript modal opens
-3. POST /api/v1/handoff-script {facility_name, facility_phone, payload}
-4. generate_handoff_script(facility_name, payload) -> NIM -> fallback
-5. Response: {script, facility, phone}
-6. Modal displays script for caseworker to read aloud
+Register:  POST /auth/register {email, name, password} → {token, user}
+Login:     POST /auth/login {email, password} → {token, user}
+           JWT stored in localStorage; axios default header set
+Verify:    GET /auth/me {Authorization: Bearer token} → {email, name, role}
+           Called on page load to restore session
+Logout:    Clear localStorage + delete axios header
 ```
 
 ---
 
 ## 6. Agent Rules (Hard Constraints)
 
-From `AGENTS.md` — apply to ALL AI tools working on this codebase:
+From `AGENTS.md` — ALL AI tools must follow these:
 
 1. **Every NIM call needs a regex fallback.** Never remove `_regex_fallback()` or its try/except wrappers.
 
-2. **Every cuDF/cuML call needs a pandas/sklearn fallback.** Import GPU libraries inside functions only (module-level import fails on MacBook). After any solver change: `python backend/solver.py --benchmark`.
+2. **Every cuDF/cuML call needs a pandas/sklearn fallback.** Import GPU libraries inside functions only. After any solver change: `python backend/solver.py --benchmark`.
 
-3. **All FastAPI request/response types use Pydantic models.** No bare dict returns. FastAPI auto-validates.
+3. **All FastAPI request/response types use Pydantic models.** No bare dict returns.
 
-4. **No hardcoded secrets.** NIM_API_KEY defaults to `"not-needed"` via `os.environ.get()`. NGC_API_KEY from env only.
+4. **No hardcoded secrets.** `NIM_API_KEY` defaults to `"not-needed"`. `NGC_API_KEY` from env only. `JWT_SECRET` MUST be overridden in production via env var.
 
-5. **Shelter CSV columns stay UPPERCASE.** Do NOT rename ORGANIZATION_NAME, SHELTER_ADDRESS, etc. in data_ingestion.py. solver.py references them by uppercase name.
+5. **Shelter CSV columns stay UPPERCASE.** Do NOT rename ORGANIZATION_NAME, SHELTER_ADDRESS, etc. CKAN returns them uppercase. `solver.py` references them by uppercase name.
 
-6. **Kiosk (Gateway B) is voice-only.** No text inputs, no form elements. Tab audit: only VoiceOrb should be focusable. Questions are TTS-only.
+6. **Kiosk (Gateway B) is voice-first.** `typing` state is the only text fallback. Tab key must land only on VoiceOrb. `🎤 Switch to voice` always present on typing screen.
 
-7. **All user input is PII-scrubbed before LLM.** `pii_scrubber.redact_pii()` is called inside `voice_session.clean_transcript()`. Never bypass. Patterns: phone, email, SIN, OHIP, postal code, dates.
+7. **All user input is PII-scrubbed before LLM.** `pii_scrubber.redact_pii()` called inside `clean_transcript()`. Never bypass.
 
-8. **Prompt injection is blocked on Gateway A.** `pii_scrubber.has_injection()` is called after cleaning in `caseworker_route()`. Returns HTTP 400 with a neutral message. Never log the injected text at INFO or above.
+8. **Prompt injection is blocked on Gateway A.** `has_injection()` called after cleaning. HTTP 400 with neutral message. Never log injected text at INFO or above.
+
+9. **`bcrypt==4.0.1` is PINNED.** Do not upgrade. `passlib 1.7.4` breaks with `bcrypt >= 4.1`.
+
+10. **`auth_store` must be in the `global` declaration of lifespan.** Missing it means auth stays `None` and all `/auth/*` endpoints return 503.
 
 ---
 
 ## 7. Recent Changes Log
 
-### Session 1 — Codebase Improvements
+### Sessions 1–9 (summarized)
 
-| File | Change |
-|------|--------|
-| `backend/solver.py` | Removed dead `eligibility_mask()` nested function (was never called) |
-| `backend/main.py` | Added `Field(ge=, le=)` validators to lat/lon on all route request models |
-| `backend/main.py` | CORS origins from `CORS_ORIGINS` env var; restricted to GET+POST, Content-Type |
-| `backend/main.py` | Added background `_session_gc()` asyncio task in lifespan (60s interval) |
-| `backend/data_ingestion.py` | Wrapped OSM JSON load in try-except -> empty fallback |
-| `backend/nim_compiler.py` | Added `import os`; replaced 3x `api_key="not-needed"` with env var |
-| `.gitignore` | Added CLAUDE.md, .claude/, learning/, Python/frontend extras, IDE dirs |
+Sessions 1-9 established: structured logging, 9 logic gap fixes, Docker stability, voice UX redesign, PII scrubber, NeMo guardrails, crisis gate, open-now filter, grounding guard, kiosk hub expansion to 12 locations, kiosk text fallback, SQLite case store (initially unconnected).
 
-### Session 2 — 9 Logic Gap Fixes
+Full details for sessions 1-9 are in the git history and earlier versions of this file.
 
-| Fix | File | Change |
-|-----|------|--------|
-| Transcript min-length | `KioskPage.tsx:64` | Hardcoded `< 5` -> `< VOICE_MIN_CHARS` (10) |
-| EligibilityFlow race condition | `EligibilityFlow.tsx:97` | Added `idx`, `flowState` to useEffect deps |
-| TTS KeyError | `voice_session.py:161` | `r['name']`/`r['address']` -> `.get()` with fallbacks |
-| OSM scoring bias | `data_ingestion.py:148` | `occupancy_ratio = 0.0` -> `0.5` (neutral) |
-| Health check NIM endpoint | `main.py:129` | Hardcoded string -> `NIM_ENDPOINT` from config |
-| Dead error UI | `KioskPage.tsx` | `setError()` now called in catch blocks; cleared on success |
-| Transit longitude conversion | `solver.py:_check_transit` | `73_000` -> `80_000` (Toronto ~80 km/degree) |
-| Null payload crash | `main.py:kiosk_route` | Added `or session.payload_draft is None` guard |
-| Countdown double-fire | `PayloadConfirm.tsx` | Added `submitted = useRef(false)` gate |
+---
 
-### Session 3 — Stability + Deployment Fixes
+### Session 10 — EDA Integration, Auth, Map, Returning Client, Capacity Ticker, Speech
 
-| Fix | File | Change |
-|-----|------|--------|
-| `has_id=None` masking | `solver.py:elig()` | `is False` → `is not True` — conservatively excludes ID-required facilities |
-| NIM timeout fast-fail | `nim_compiler.py` | Added `APIConnectionError, APITimeoutError` catch with `break` — skips remaining retries immediately |
-| Docker pip cache | `docker-compose.yml` | Added `pip-cache` named volume; dropped `--reload` from backend container |
-| GX10 startup script | `start-gx10.sh` | New script: hardware check, .env validation, venv setup, data verify, terminal layout instructions |
+#### EDA Data Integration
 
-### Session 4 — Voice UX + Kiosk Redesign
+| Change | Detail |
+|--------|--------|
+| `data/respite_sites.csv` | 15 → 1,599 rows: +1,407 geocoded places of worship + 177 cooling centres from `EDA/data/processed/` |
+| `data/hygiene_stations.csv` | 15 → 817 rows: +798 drinking fountains + 4 public washrooms from EDA |
+| `EDA/.gitignore` | Added: `.venv/` (660 MB), `data/raw/shelter__daily-*.csv` (13-15 MB each), `data/raw/*.csv.csv` (accidental duplicates) |
+| EDA validated findings | H1: 96.8% occupancy; H2: 105 shelters; H3: 4,012 Central Intake calls/day; H6: weather correlation; H7: 1,584 respite hubs; H8: 802 hygiene assets |
 
-| Change | File | Detail |
-|--------|------|--------|
-| TTS voice quality | `useSpeech.ts` | `pitch=0.85`; preferred voice list: Google UK English Female → Samantha → Karen → Moira |
-| Tap-to-toggle | `VoiceOrb.tsx` | Props: `onClick` (was `onPointerDown`/`onPointerUp`); labels: "Tap to speak" / "Tap when done" |
-| Kiosk interaction | `KioskPage.tsx` | `handleOrbTap` replaces `handleOrbDown`/`handleOrbUp`; dual recording (MediaRecorder + Web Speech) |
-| Live transcript | `KioskPage.tsx` | Transcript shown below orb during `recording`/`processing` states |
-| Warm spoken text | `KioskPage.tsx` | All 4 TTS messages rewritten: "Welcome. I'm here to help you…" etc. |
-| Eligibility tap | `EligibilityFlow.tsx` | VoiceOrb `onClick` submits answer early; auto-submit and timeout still work as fallback |
-| Warm TTS script | `voice_session.py` | `build_tts_itinerary_script`: "First, go to…", "Next…", "I hope this helps." |
-| NVIDIA ASR NIM | `main.py`, `docker-compose.yml`, `useSpeech.ts` | `POST /api/v1/transcribe`; Parakeet-0.6B-CTC on :9000; `transcribeAudio()` in frontend; `stopRecording()` now async |
-| python-multipart | `requirements.txt` | Added — required by FastAPI `UploadFile` |
+#### Auth System
 
-### Session 5 — PII Guardrails + NeMo Guardrails
+| Change | Detail |
+|--------|--------|
+| `backend/auth_store.py` (new) | SQLite users table in `logs/cases.db`; bcrypt passwords; JWT HS256 24h tokens |
+| `backend/requirements.txt` | Added `passlib[bcrypt]==1.7.4`, `bcrypt==4.0.1` (PINNED), `python-jose[cryptography]==3.3.0` |
+| `backend/main.py` | `AuthRegisterRequest`, `AuthLoginRequest`, `auth_store` global, 3 auth endpoints, `_cw_id_from_request()` JWT extractor |
+| `frontend/src/context/AuthContext.tsx` (new) | React context: login/register/logout/session restore |
+| `frontend/src/components/Auth/LoginPage.tsx` (new) | Tabbed Sign In/Create Account form |
+| `frontend/src/App.tsx` | `AuthProvider` wrapping, `/login` route, `ProtectedCaseworker` wrapper |
+| Bug fixed | `global auth_store` missing from lifespan → 503 on all auth requests. Fixed by adding to `global` declaration |
+| Bug fixed | `bcrypt >= 4.1` drops `__about__` → passlib raises obscure error masked as 409. Fixed by pinning `bcrypt==4.0.1` |
 
-| Change | File | Detail |
-|--------|------|--------|
-| PII scrubber | `backend/pii_scrubber.py` (new) | `redact_pii()`: 6 Canadian PII patterns; `has_injection()`: 7 injection patterns |
-| PII in transcript cleaning | `voice_session.py` | `clean_transcript()` calls `redact_pii()` after filler removal |
-| Privacy rule in NIM prompt | `config.py` | `NIM_TRIAGE_PROMPT` opens with PRIVACY RULE block: ignore names/addresses/health |
-| Input length limits | `main.py` | `text` max 5000, `transcript` max 2000, `client_name` max 100 |
-| Remove transcript from logs | `main.py` | Replaced `transcript[:120]` debug log with `"{len} chars"` — no PII in logfiles |
-| Injection guard | `main.py:caseworker_route` | `has_injection()` check after cleaning → HTTP 400 with neutral message |
-| NeMo Guardrails | `guardrails_client.py` (new), `guardrails/config.yml`, `guardrails/rails.co` | `init_guardrails()` + `check_input()` on both routes; PassthroughLLM for zero inference overhead; colang rails for jailbreak + harmful |
-| Health endpoint | `main.py` | `nemo_guardrails: "active"|"disabled"` field added |
-| AGENTS.md / CLAUDE.md | governance files | Rules 7 + 8 added; two new Hard Boundaries |
+#### Case Store Fully Wired
+
+| Change | Detail |
+|--------|--------|
+| `backend/main.py` | `_cw_id_from_request()` extracts caseworker identity from JWT; `case_store.find_similar()` called before LLM; `case_store.save_case()` called after routing; `case_id` returned in response |
+| `backend/main.py` | `returning_hint` computed: if top similar case has `similarity >= 0.35`, includes `{case_id, last_seen, placed_at, outcome, similarity, client_name}` in response |
+| `backend/main.py` | Two new endpoints: `GET /caseworker/{id}/history`, `PATCH /case/{id}/outcome` |
+| `frontend/src/types/api.ts` | `CaseRecord`, `CaseOutcome`, `ReturningClientHint`, `CaseworkerHistoryResponse`, `OutcomeUpdateRequest` types added |
+
+#### Map View
+
+| Change | Detail |
+|--------|--------|
+| `frontend/src/components/GatewayA/RouteMap.tsx` (new) | Leaflet lazy-loaded; colored pins per pillar; origin marker; click popups; fitBounds; collapsible |
+| `frontend/src/index.css` | `@import 'leaflet/dist/leaflet.css'` added |
+| `frontend/package.json` | `leaflet` + `@types/leaflet` added |
+| `CaseworkerPage.tsx` | `<RouteMap>` rendered above `<ItineraryView>` in routed state |
+
+#### Returning Client Detection
+
+| Change | Detail |
+|--------|--------|
+| `backend/main.py` | `returning_hint` computed from `find_similar()` result; threshold 0.35 |
+| `CaseworkerPage.tsx` | Purple banner rendered if `routeResult.returning_hint` present; shows last_seen date, placed_at, outcome, match % |
+
+#### Capacity Ticker
+
+| Change | Detail |
+|--------|--------|
+| `backend/main.py` | `GET /api/v1/capacity`: computes `total_beds`, `available_beds`, `occupancy_pct` from live shelters dataset (no LLM) |
+| `frontend/src/components/GatewayA/CapacityTicker.tsx` (new) | Polls `/capacity` every 60s; animated pulse dot; occupancy bar; color-coded by pressure |
+| `CaseworkerPage.tsx` | `<CapacityTicker>` in header |
+
+#### Speech Improvements
+
+| Change | Detail |
+|--------|--------|
+| `useSpeech.ts` | `en-CA` → `en-IN` for STT (Google's dedicated Indian English model) |
+| `useSpeech.ts` | TTS stays `en-US` (en-IN TTS voices not installed on most machines) |
+| `useSpeech.ts` | `wantListeningRef` + auto-restart in `onend`: continuous mode survives Chrome termination/network blip |
+| `useSpeech.ts` | `finalTextRef` accumulates confirmed-final segments; uses `e.resultIndex` to avoid re-processing |
+| `useSpeech.ts` | `sr.onstart` sets `isListening=true` (not before `sr.start()`) — accurate UI state |
+| `useSpeech.ts` | `getUserMedia` with `echoCancellation`, `noiseSuppression`, `autoGainControl` |
+| `useSpeech.ts` | `voiceschanged` event caches TTS voices at module load (not per-call) |
+| `frontend/src/config.ts` | `VOICE_SILENCE_KILL_MS`: 10,000 → 2,500 (2.5s natural pause) |
+| `VoiceInput.tsx` | `en-CA` → `en-IN` |
+| `KioskPage.tsx` | `startListening(false)` → `startListening(true)` (continuous mode) |
+
+#### CaseworkerPage Identity Changes
+
+| Change | Detail |
+|--------|--------|
+| `CaseworkerPage.tsx` | `caseworker_id` from `user?.email` (JWT via `useAuth()`); localStorage name input removed |
+| `CaseworkerPage.tsx` | Header now shows caseworker name + Sign Out button |
+| `CaseworkerPage.tsx` | `historyRefresh` incremented when `case_id` returned → `CaseworkerHistory` auto-reloads |
 
 ---
 
 ## 8. Known Remaining Issues
 
-Not yet fixed — reference for next LLM:
-
-1. ~~**`has_id=None` treated as "has ID"**~~ **FIXED** — `solver.py:elig()` now uses `has_id is not True`, so `None` conservatively excludes ID-required facilities.
+1. **Caseworker origin hardcoded** (`CaseworkerPage.tsx`)
+   `originLat = 43.6532, originLon = -79.3832` (downtown Toronto). Fix: geolocation API or location picker similar to kiosk hub selector.
 
 2. **Shelter sector mapping incomplete** (`solver.py:_apply_masks()`)
-   `sector_map` covers standard values only. Non-standard SECTOR values (e.g. "Couples") silently excluded. Fix: add catch-all or extend the mapping.
+   Non-standard SECTOR values (e.g. "Couples") silently excluded. Fix: extend sector_map dict.
 
-3. **No audit trail for caseworker routing** (`main.py:caseworker_route`)
-   Gateway A creates no session. Routing decisions are ephemeral. Fix: append to a log file or persist to SQLite.
+3. **GX10 NIM docker pull blocked by EULA**
+   `nvcr.io/nim/google/gemma-3n-e4b-it:latest` → Access Denied on `docker compose up nim`. Fix: accept license at `https://build.nvidia.com/google/gemma-3n-e4b-it` then re-run `bash scripts/gx10-setup-models.sh`. Cloud NIM (Tier 1) works as substitute when `NGC_API_KEY` set.
 
-4. **Frontend/backend config not auto-synced** (`frontend/src/config.ts` vs `backend/config.py`)
-   VOICE_* constants are manually mirrored. Fix: add a CI check comparing the values, or generate config.ts from Python.
+4. **Frontend on :5173, not :3000**
+   Demo URLs: `http://localhost:5173/caseworker` and `http://localhost:5173/kiosk`.
+   Backend CORS defaults to `http://localhost:3000` — set `CORS_ORIGINS=http://localhost:5173` in `.env`.
 
-5. **`parse_eligibility_answer()` never called by backend** (`voice_session.py`)
-   Frontend duplicates this logic in `EligibilityFlow.tsx::parseAnswer()`. If patterns change, both files must update. Fix: expose a `/kiosk/parse-answer` endpoint or document that frontend owns this responsibility.
+5. **JWT_SECRET is insecure default**
+   `"haven-matrix-dev-secret-change-in-prod"` hardcoded in `auth_store.py`. Set `JWT_SECRET=<random>` in `.env` before any real deployment.
 
-6. **BenchmarkPanel fetch on unmount** (`BenchmarkPanel.tsx`)
-   Async fetch may try to set state on unmounted component. Fix: use AbortController in cleanup.
+6. **No email verification** (intentional for hackathon)
+   Anyone can register. Acceptable for demo. Production needs: email verification, rate limiting on register endpoint.
 
-7. ~~**NIM retry loop treats all errors equally**~~ **FIXED** — `nim_compiler.py` now imports `APIConnectionError, APITimeoutError` from openai and `break`s the inner retry loop on either, immediately moving to the next tier instead of waiting 15s × 3 retries.
+7. **`parse_eligibility_answer()` not called by backend**
+   Frontend owns this logic in `EligibilityFlow.tsx::parseAnswer()`. If patterns change, both must update.
 
-8. **Caseworker origin hardcoded** (`CaseworkerPage.tsx`)
-   `origin_lat: 43.6532, origin_lon: -79.3832` hardcoded. Fix: geolocation API or location picker.
+8. **BenchmarkPanel fetch on unmount**
+   Async fetch may try to set state on unmounted component. Fix: AbortController in cleanup.
+
+9. **Respite/hygiene EDA entries have minimal metadata**
+   The 1,584 EDA respite entries (places of worship + cooling centres) and 802 hygiene entries (fountains + washrooms) have `bypass_pathway=""`, `intake_preparation="Call ahead..."` defaults. Fine for KNN routing but caseworkers see sparse details. Enrich progressively if time permits.
+
+10. **Frontend/backend config not auto-synced**
+    `VOICE_SILENCE_KILL_MS` (2500) and other voice constants are manually mirrored between `frontend/src/config.ts` and `backend/config.py`.
 
 ---
 
@@ -692,14 +868,15 @@ Not yet fixed — reference for next LLM:
 
 ### Add a New Service Pillar
 
-1. Add CSV to `data/` with: `lat`, `lon`, `organization_name`, `address`, `phone`, `hours`, `requires_id`, `harm_reduction`, `bypass_pathway`, `intake_preparation`
+1. Add CSV to `data/` with lowercase columns: `lat`, `lon`, `organization_name`, `address`, `phone`, `hours`, `requires_id`, `harm_reduction`, `bypass_pathway`, `intake_preparation`
 2. Add path constant in `config.py`
-3. Add load in `data_ingestion.py::load_all()`: `("new_pillar", NEW_CSV)`
-4. Add `needs_new_pillar: bool` field to `NeedsPayload` in `nim_compiler.py`
-5. Add mask logic in `solver.py::_apply_masks()`
+3. Add load line in `data_ingestion.py::load_all()`: `("new_pillar", NEW_CSV)`
+4. Add `needs_new_pillar: bool = False` to `NeedsPayload` in `nim_compiler.py`
+5. Add mask + pillar entry in `solver.py::_apply_masks()`
 6. Update `NIM_TRIAGE_PROMPT` in `config.py` to include the new field
 7. Update `_regex_fallback()` keywords
-8. Frontend itinerary display picks up the new pillar key automatically
+8. Frontend itinerary display picks up the new key automatically
+9. Add a color for the new pillar in `RouteMap.tsx::PILLAR_COLORS`
 
 ### Change Solver Weights
 
@@ -707,99 +884,133 @@ Edit `config.py`: `WEIGHT_DISTANCE`, `WEIGHT_OCCUPANCY`, `WEIGHT_TRANSIT`. Run: 
 
 ### Add an Eligibility Question
 
-1. Add pillar to `ASK_*_FOR_PILLARS` list in `config.py`
+1. Add pillar to `ASK_*_FOR_PILLARS` in `config.py`
 2. Add question string in `voice_session.py::resolve_eligibility_questions()`
 3. Add keyword parsing in `voice_session.py::parse_eligibility_answer()`
-4. Mirror the parsing in `EligibilityFlow.tsx::parseAnswer()`
+4. Mirror parsing in `EligibilityFlow.tsx::parseAnswer()`
 5. Add field to `NeedsPayload` and its validator if needed
 
-### Change NIM Prompts
+### Upgrade Case Store to ChromaDB
 
-Edit prompts in `config.py`. Test:
-```bash
-curl -X POST http://localhost:8000/api/v1/caseworker/route \
-  -H "Content-Type: application/json" \
-  -d '{"text": "I need shelter and food, no ID, been drinking"}'
+Replace `find_similar()` in `case_store.py`:
+```python
+import chromadb
+from sentence_transformers import SentenceTransformer
+# Initialize collection, embed transcripts, use collection.query() for similarity
+# Keep the same return shape: list[dict] with 'similarity', 'placed_at', etc.
 ```
 
-### Switch LLM
+### Add Password Reset
 
-Change `NIM_MODEL` in `config.py`. Any OpenAI-spec server works. Triage prompt's JSON schema must be supported by the model.
+1. Add `reset_tokens` table to `auth_store.py`
+2. `POST /auth/forgot` → generate token, email user (needs SMTP config)
+3. `POST /auth/reset` → verify token, update password hash
 
 ---
 
 ## 10. Testing Checklist
 
 **Backend startup:**
-- [ ] `python backend/data_ingestion.py --verify --mode cpu` — datasets load with row counts
-- [ ] `uvicorn backend.main:app --reload` starts without errors
-- [ ] `GET /api/v1/health` returns `status: ok`, `nemo_guardrails: "disabled"` (default) or `"active"`
-- [ ] Startup log shows: `guardrails=active` or `guardrails=disabled`
+```bash
+# Verify datasets load
+python backend/data_ingestion.py --verify --mode cpu
+# Expected: 12,234 records, respite=1599, hygiene=817
 
-**PII + injection:**
-- [ ] `python3 -c "from backend.pii_scrubber import redact_pii, has_injection; ..."` — verify patterns fire
-- [ ] Logs show `"PII redacted: N items"` not transcript content when PII is present
+# Start server
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Health check
+curl http://localhost:8000/api/v1/health
+# Expect: status:ok, rapids_mode:cpu, datasets includes respite/hygiene counts
+```
+
+**Auth:**
+```bash
+# Register
+curl -s -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@test.com","name":"Test User","password":"test1234"}' | python3 -m json.tool
+# Expect: {token: "eyJ...", user: {email, name, role: "caseworker"}}
+
+# Login
+curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@test.com","password":"test1234"}' | python3 -m json.tool
+
+# Me (replace TOKEN with actual JWT)
+curl -s http://localhost:8000/api/v1/auth/me \
+  -H "Authorization: Bearer TOKEN" | python3 -m json.tool
+
+# Duplicate email → 409
+# Wrong password → 401
+```
+
+**Routing + case store:**
+```bash
+curl -s -X POST http://localhost:8000/api/v1/caseworker/route \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"text":"male needs shelter no id been drinking","origin_lat":43.6532,"origin_lon":-79.3832}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('case_id:', d.get('case_id')); print('pillars:', list(d['itinerary'].keys()))"
+# Expect: case_id is not null (if JWT provided), itinerary has shelter
+
+# Check case saved
+curl -s http://localhost:8000/api/v1/caseworker/test@test.com/history | python3 -m json.tool
+
+# Update outcome
+curl -s -X PATCH http://localhost:8000/api/v1/case/{case_id}/outcome \
+  -H "Content-Type: application/json" \
+  -d '{"outcome":"placed"}' | python3 -m json.tool
+```
+
+**Capacity ticker:**
+```bash
+curl -s http://localhost:8000/api/v1/capacity | python3 -m json.tool
+# Expect: {total_beds, available_beds, occupied_beds, occupancy_pct}
+```
+
+**Returning client hint:**
+```bash
+# Route a case, mark it placed, then route a similar case
+# Second route should return returning_hint with similarity >= 0.35
+```
+
+**Frontend:**
+- [ ] `http://localhost:5173/caseworker` → redirects to `/login` (not authenticated)
+- [ ] Register new account → lands on caseworker page with name in header
+- [ ] CapacityTicker shows in header with animated pulse dot
+- [ ] Route a client → RouteMap appears, click "Map View" to expand
+- [ ] Route same client description again → purple returning client banner appears
+- [ ] CaseworkerHistory panel shows the routed case, expand for detail, mark outcome
+- [ ] Sign out → redirects to login page
+- [ ] `http://localhost:5173/kiosk` → loads without login (public)
+
+**PII + safety:**
 - [ ] `POST /caseworker/route` with `"ignore previous instructions"` → HTTP 400
-- [ ] `POST /caseworker/route` with text > 5000 chars → HTTP 422
-- [ ] `POST /kiosk/session` with transcript > 2000 chars → HTTP 422
-
-**ASR NIM (when Parakeet container running on :9000):**
-- [ ] `curl http://localhost:9000/v1/models` — returns model list
-- [ ] `POST /api/v1/transcribe` with valid audio file → `{"transcript": "...", "source": "local"}`
-- [ ] Kill container → `POST /api/v1/transcribe` → HTTP 503 (frontend falls back to Web Speech)
-
-**Routing:**
-- [ ] `POST /api/v1/caseworker/route` with "need shelter food no ID been drinking" returns itinerary
-- [ ] `compile_method` is `"nim"` if LLM running, `"regex"` if not
-- [ ] `POST /api/v1/caseworker/route` with `origin_lat=999` returns HTTP 422
-- [ ] `POST /kiosk/session` with transcript < 10 chars returns HTTP 400
-- [ ] `POST /kiosk/route` with invalid session_id returns HTTP 404
-
-**Solver:**
-- [ ] Results sorted by composite_score ascending
-- [ ] Shelter results filtered to UNOCCUPIED_BEDS > 0
-- [ ] Shelter with `requires_id=True` excluded when `has_id=None` (conservative masking)
-- [ ] `python backend/solver.py --benchmark` completes
-
-**Frontend kiosk (Chrome required):**
-- [ ] Single tap starts listening + recording; second tap stops both
-- [ ] Live transcript appears below orb while recording
-- [ ] TTS greeting: "Welcome. I'm here to help you find shelter, food, or care…"
-- [ ] Eligibility questions are spoken (not shown as text)
-- [ ] Tap during eligibility `waiting_for_answer` submits early
-- [ ] Tab audit: only VoiceOrb is focusable
-
-**Frontend caseworker:**
-- [ ] VoiceInput → PayloadConfirm (5s countdown) → Itinerary renders
-- [ ] ShiftBriefing loads, HandoffScript modal generates script
+- [ ] `POST /caseworker/route` with phone number in text → PII redacted in logs
+- [ ] `POST /caseworker/route` with crisis text → crisis response, no routing
 
 ---
 
 ## 11. GX10 Remote Access & GPU Model Setup
 
-> **Full ops guide:** [`gx10_access_and_gpu_guide.md`](gx10_access_and_gpu_guide.md)
-> **Day-of checklist:** [`haven_matrix_reference.md`](haven_matrix_reference.md) §4 and §10
+See `learning/gx10_access_and_gpu_guide.md` for full SSH/Tailscale instructions.
 
-### Access summary (gx10-3cd8)
+**Quick reference:**
+- Tailscale IP: `100.81.85.39`
+- SSH: `ssh chetankumar@100.81.85.39`
+- NIM endpoint: `http://100.81.85.39:8001/v1`
+- Set in `.env`: `NIM_ENDPOINT=http://100.81.85.39:8001/v1`
 
-| Field | Value |
-|-------|-------|
-| Hotspot SSID / password | `gx10-3cd8` |
-| SSH | `ssh asus@gx10-3cd8.local` |
-| Username / password | `asus` / `password` |
-| Tailscale team invite | https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11 |
+**EULA blocker:** `nvcr.io/nim/google/gemma-3n-e4b-it:latest` requires license acceptance at `https://build.nvidia.com/google/gemma-3n-e4b-it` before `docker pull` works.
 
-The GX10 has **no Wi-Fi**. Initial access: connect laptop to hotspot → SSH → `yes` → `password`. For persistent remote access: install Tailscale on laptop → SSH in → `sudo tailscale up` → authorize URL.
+**Workaround active:** `NGC_API_KEY` set in `.env` → cloud NIM (Tier 1) used. `compile_method: "nim"` works without GX10.
 
-### Architecture (team default)
-
-| Where | What | GPU? |
-|-------|------|------|
-| **GX10** | `docker compose up nim` (+ optional `asr`) | Yes — models in Docker volumes `nim-cache`, `asr-cache` |
-| **Mac** | `uvicorn` + `npm run dev` | No — `FORCE_CPU_SOLVER=1` |
-
-Mac connects via Tailscale: `NIM_ENDPOINT=http://100.81.85.39:8001/v1` (replace with your unit IP).
-
-Models download automatically on first NIM start (NGC); not stored on Mac.
-
-Full steps: [`gx10_access_and_gpu_guide.md`](gx10_access_and_gpu_guide.md) Steps 3–4.
+**On GX10 (inside RAPIDS container):**
+```bash
+docker run --gpus all --network host -v $(pwd):/app -w /app \
+  -it rapidsai/base:25.06-cuda12-py3.12 bash
+pip install -r backend/requirements.txt
+python backend/data_ingestion.py --verify --mode gpu
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```

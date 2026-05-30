@@ -37,14 +37,23 @@ No `dict` return types without a corresponding Pydantic model in `main.py`. All 
 
 The Toronto CKAN dataset uses `ORGANIZATION_NAME`, `SHELTER_ADDRESS`, `SECTOR`, `SERVICE_USER_COUNT`, `CAPACITY_ACTUAL_BED`, `UNOCCUPIED_BEDS`, `LAT`, `LON`. Do NOT rename these in `data_ingestion.py` — the masking logic in `solver.py` references them by UPPERCASE name.
 
-## Rule 6 — Kiosk (Gateway B) is voice-only
+## Rule 6 — Kiosk (Gateway B) is voice-first with one text fallback
 
-`KioskPage.tsx` and all its children must never render:
-- Text input fields
-- Form elements (except the VoiceOrb)
-- Visible question text (questions are TTS only)
+`KioskPage.tsx` and all its children must never render text inputs or form elements
+**except** in the `'typing'` state, which exists for environments where voice fails
+(noisy venues, windy conditions). Two triggers:
+1. **Manual toggle** — the `⌨️ Can't speak? Type instead` button on the idle screen
+   (`tabIndex={-1}` — excluded from tab order so keyboard nav still lands on VoiceOrb).
+2. **Auto-fallback** — when a recording produces a blank or too-short transcript.
 
-The tab-navigation audit is: press Tab through `/kiosk` — the only focusable element should be the VoiceOrb. Enforce this before every commit that touches GatewayB components.
+Rules for the `'typing'` state:
+- The `🎤 Switch to voice` button must always be present so users can return.
+- Eligibility questions after text submission are still delivered by TTS (no visible text).
+- Visible question text (eligibility) is still TTS only — never rendered.
+
+Tab-navigation audit: press Tab on `/kiosk` during **normal voice operation** — the only
+focusable element must be the VoiceOrb. The text toggle uses `tabIndex={-1}` to enforce this.
+Enforce before every commit that touches GatewayB components.
 
 ## Rule 7 — All user input is PII-scrubbed before LLM inference
 

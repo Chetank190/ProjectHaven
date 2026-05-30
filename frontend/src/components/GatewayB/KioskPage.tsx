@@ -11,7 +11,7 @@ import { HavenMatrixLogo } from '../shared/HavenMatrixLogo';
 type KioskState =
   | 'idle' | 'hub_select' | 'recording'
   | 'processing' | 'eligibility' | 'routing'
-  | 'speaking' | 'crisis' | 'done';
+  | 'speaking' | 'crisis' | 'typing' | 'done';
 
 const HUB_NAMES = Object.keys(KIOSK_HUBS);
 
@@ -27,6 +27,7 @@ export function KioskPage() {
   const [routeResult,     setRouteResult]     = useState<KioskRouteResponse | null>(null);
   const [crisisHotline,   setCrisisHotline]   = useState<string | null>(null);
   const [crisisText,      setCrisisText]      = useState<string | null>(null);
+  const [typedText,       setTypedText]       = useState('');
   const [error,           setError]           = useState<string | null>(null);
 
   const idleTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,7 +84,9 @@ export function KioskPage() {
     if (!captured) captured = transcript;  // Web Speech fallback
 
     if (!captured || captured.trim().length < VOICE_MIN_CHARS) {
-      speak("I'm sorry, I didn't catch that. Please tap the button and try again.", () => setKioskState('idle'));
+      // Voice failed silently (noisy environment) — offer text fallback instead of an error
+      setTypedText('');
+      setKioskState('typing');
       return;
     }
 
@@ -133,6 +136,35 @@ export function KioskPage() {
 
   const onEligibilityComplete = (answers: Record<string, boolean | string | null>) => {
     if (sessionId) submitRoute(sessionId, answers);
+  };
+
+  const submitText = async (text: string) => {
+    if (text.trim().length < VOICE_MIN_CHARS) return;
+    setError(null);
+    setKioskState('processing');
+    try {
+      const r = await api.post<KioskSessionResponse>('/kiosk/session', {
+        transcript: text.trim(),
+        origin_lat: hubCoords[0],
+        origin_lon: hubCoords[1],
+      });
+      if (r.data.next_step === 'crisis') {
+        setCrisisHotline(r.data.crisis_hotline ?? '988');
+        setCrisisText(r.data.escalation_text ?? '');
+        setKioskState('crisis');
+        speak(r.data.escalation_text ?? 'Please call 9-8-8 for crisis support.');
+        return;
+      }
+      setSessionId(r.data.session_id);
+      if (r.data.next_step === 'collect_eligibility' && r.data.eligibility_questions.length > 0) {
+        setQuestions(r.data.eligibility_questions);
+        setKioskState('eligibility');
+      } else {
+        await submitRoute(r.data.session_id!, {});
+      }
+    } catch {
+      setKioskState('typing');  // stay on typing screen so they can retry
+    }
   };
 
   // Hub selection — show when no hub chosen yet, or when user taps Change
@@ -236,6 +268,82 @@ export function KioskPage() {
     );
   }
 
+  if (kioskState === 'typing') {
+    const ready = typedText.trim().length >= VOICE_MIN_CHARS;
+    return (
+      <div className="min-h-screen flex flex-col"
+        style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #0D2436 60%, #061825 100%)' }}>
+
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-5 pt-5 pb-3">
+          <button
+            tabIndex={0}
+            onClick={() => { setTypedText(''); setKioskState('idle'); }}
+            className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-all"
+            style={{
+              color: 'rgba(114,200,226,0.65)',
+              background: 'rgba(26,147,187,0.08)',
+              border: '1px solid rgba(56,174,210,0.18)',
+            }}>
+            🎤 Switch to voice
+          </button>
+          <span className="text-xs" style={{ color: 'rgba(114,200,226,0.30)' }}>
+            📍 {hubName}
+          </span>
+        </div>
+
+        {/* Prompt */}
+        <div className="px-6 pt-4 pb-6">
+          <h2 className="text-3xl font-light mb-2" style={{ color: 'rgba(255,255,255,0.90)' }}>
+            Tell us what you need
+          </h2>
+          <p className="text-base" style={{ color: 'rgba(255,255,255,0.35)' }}>
+            Describe your situation — shelter, food, support, or anything else
+          </p>
+        </div>
+
+        {/* Large textarea */}
+        <div className="flex-1 px-6">
+          <textarea
+            value={typedText}
+            onChange={e => setTypedText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && ready) { e.preventDefault(); submitText(typedText); } }}
+            placeholder="e.g. I need a shelter for tonight. I don't have ID. I've been drinking."
+            rows={7}
+            autoFocus
+            className="w-full rounded-2xl p-5 resize-none outline-none leading-relaxed"
+            style={{
+              fontSize: '1.2rem',
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(56,174,210,0.25)',
+              color: 'rgba(255,255,255,0.90)',
+              caretColor: '#38AED2',
+            }}
+          />
+          <p className="text-xs mt-2 text-right" style={{ color: 'rgba(255,255,255,0.20)' }}>
+            {typedText.trim().length} chars — {VOICE_MIN_CHARS} min
+          </p>
+        </div>
+
+        {/* Submit */}
+        <div className="px-6 pb-10 pt-4">
+          <button
+            onClick={() => submitText(typedText)}
+            disabled={!ready}
+            className="w-full py-5 rounded-2xl text-xl font-medium transition-all"
+            style={{
+              background: ready ? 'linear-gradient(135deg, #1A7A9A, #38AED2)' : 'rgba(255,255,255,0.05)',
+              color: ready ? 'white' : 'rgba(255,255,255,0.20)',
+              border: ready ? 'none' : '1px solid rgba(255,255,255,0.08)',
+              cursor: ready ? 'pointer' : 'not-allowed',
+            }}>
+            Find help →
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (kioskState === 'eligibility') {
     return (
       <div className="min-h-screen flex items-center justify-center"
@@ -307,6 +415,22 @@ export function KioskPage() {
               {transcript}
             </p>
           </div>
+        )}
+
+        {/* Text fallback toggle — only on idle, excluded from tab order (voice is primary) */}
+        {(kioskState === 'idle' || kioskState === 'done') && (
+          <button
+            tabIndex={-1}
+            onClick={() => { clearTranscript(); setTypedText(''); setKioskState('typing'); }}
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 px-5 py-2.5 rounded-full transition-all"
+            style={{
+              color: 'rgba(114,200,226,0.30)',
+              border: '1px solid rgba(56,174,210,0.10)',
+              background: 'rgba(26,147,187,0.04)',
+              fontSize: '0.8rem',
+            }}>
+            ⌨️ Can't speak? Type instead
+          </button>
         )}
       </div>
     </div>

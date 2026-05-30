@@ -39,10 +39,11 @@ export interface ItineraryResult {
 export type Itinerary = Record<string, ItineraryResult[]>;
 
 export interface CaseworkerRouteRequest {
-  text:         string;
-  origin_lat:   number;
-  origin_lon:   number;
-  client_name?: string;
+  text:           string;
+  origin_lat:     number;
+  origin_lon:     number;
+  client_name?:   string;
+  caseworker_id?: string;
 }
 
 export interface CaseworkerRouteResponse {
@@ -60,6 +61,53 @@ export interface CaseworkerRouteResponse {
   itinerary:             Itinerary;
   ticket_text:           string;
   eligibility_questions: string[];
+  case_id?:              string;
+  returning_hint?:       ReturningClientHint;
+}
+
+export interface ReturningClientHint {
+  case_id:     string;
+  last_seen:   string;
+  placed_at:   string | null;
+  outcome:     string;
+  similarity:  number;
+  client_name: string;
+}
+
+export interface CapacityResponse {
+  total_beds:     number;
+  available_beds: number;
+  occupied_beds:  number;
+  occupancy_pct:  number;
+}
+
+export interface AuthUser     { email: string; name: string; role: string; }
+export interface AuthResponse { token: string; user: AuthUser; }
+
+export type CaseOutcome = 'pending' | 'placed' | 'declined' | 'returned' | 'referred_elsewhere';
+
+export interface CaseRecord {
+  id:            string;
+  caseworker_id: string;
+  client_name:   string;
+  created_at:    string;
+  transcript:    string;
+  needs:         NeedsPayload | null;
+  itinerary:     Itinerary | null;
+  ticket_text:   string | null;
+  outcome:       CaseOutcome;
+  outcome_notes: string | null;
+  updated_at:    string;
+}
+
+export interface CaseworkerHistoryResponse {
+  cases: CaseRecord[];
+  total: number;
+}
+
+export interface OutcomeUpdateRequest {
+  outcome: CaseOutcome;
+  notes?:  string;
 }
 
 export interface KioskSessionRequest {

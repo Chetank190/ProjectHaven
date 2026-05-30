@@ -5,6 +5,7 @@ Launch: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import asyncio
+import json
 import logging
 import logging.handlers
 import os
@@ -24,8 +25,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import (
     EngineMode, FORCE_CPU_SOLVER, KIOSK_HUBS, LOG_DIR, NIM_ENDPOINT, TELEMETRY_CSV,
-    ASR_NIM_URL, ASR_CLOUD_URL, ASR_NIM_TIMEOUT,
+    ASR_NIM_URL, ASR_CLOUD_URL, ASR_NIM_TIMEOUT, CASE_DB_PATH,
 )
+from case_store import CaseStore
+from auth_store import AuthStore
 from data_ingestion import load_all, fetch_weather_alert, get_weather_alert, refresh_shelters
 from crisis_gate import is_crisis, build_escalation_reply
 from guardrails_client import init_guardrails, check_input as guardrails_check
@@ -81,6 +84,8 @@ datasets_cpu: dict = {}
 _last_benchmark: dict = {"gpu_ms": None, "cpu_ms": None}
 _rapids_mode: str = "cpu"
 _telemetry_header_written: bool = False
+case_store: CaseStore | None = None
+auth_store: AuthStore | None = None
 
 
 def _log_telemetry(gateway: str, payload: NeedsPayload, compile_method: str,
@@ -114,7 +119,9 @@ def _log_telemetry(gateway: str, payload: NeedsPayload, compile_method: str,
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global datasets_gpu, datasets_cpu, _rapids_mode, _telemetry_header_written
+    global datasets_gpu, datasets_cpu, _rapids_mode, _telemetry_header_written, case_store, auth_store
+    case_store = CaseStore(str(CASE_DB_PATH))
+    auth_store = AuthStore(str(CASE_DB_PATH))
 
     _setup_logging()
 
@@ -211,10 +218,37 @@ app.add_middleware(_ReqLogMiddleware)
 
 # ── Request models ────────────────────────────────────────────────────────────
 class CaseworkerRouteRequest(BaseModel):
-    text:        str        = Field(..., max_length=5000)
-    origin_lat:  float      = Field(43.6532, ge=-90, le=90)
-    origin_lon:  float      = Field(-79.3832, ge=-180, le=180)
-    client_name: str | None = Field(None, max_length=100)
+    text:          str        = Field(..., max_length=5000)
+    origin_lat:    float      = Field(43.6532, ge=-90, le=90)
+    origin_lon:    float      = Field(-79.3832, ge=-180, le=180)
+    client_name:   str | None = Field(None, max_length=100)
+    caseworker_id: str | None = Field(None, max_length=80)
+
+
+class OutcomeUpdateRequest(BaseModel):
+    outcome: str = Field(..., pattern=r"^(pending|placed|declined|returned|referred_elsewhere)$")
+    notes:   str = Field("", max_length=500)
+
+
+class AuthRegisterRequest(BaseModel):
+    email:    str = Field(..., max_length=120)
+    name:     str = Field(..., min_length=1, max_length=80)
+    password: str = Field(..., min_length=6, max_length=128)
+
+
+class AuthLoginRequest(BaseModel):
+    email:    str = Field(..., max_length=120)
+    password: str = Field(..., max_length=128)
+
+
+def _cw_id_from_request(request: Request, fallback: str | None) -> str | None:
+    """Extract caseworker identity: JWT email takes priority over provided field."""
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer ") and auth_store:
+        payload = AuthStore.decode_token(auth_header[7:])
+        if payload and payload.get("sub"):
+            return payload["sub"]
+    return fallback
 
 
 class KioskSessionRequest(BaseModel):
@@ -438,7 +472,27 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
             "eligibility_questions": [],
         }
 
-    payload, method, nim_ms = await compile_needs_async(cleaned)
+    cw_id = _cw_id_from_request(request, req.caseworker_id)
+
+    # Pull similar resolved cases → inject as RAG context into the LLM prompt
+    similar = case_store.find_similar(cleaned, limit=3) if case_store else []
+    if similar:
+        logger.info(f"[{rid}] injecting {len(similar)} similar cases into LLM context")
+
+    # Returning-client hint — surface top match if strong enough
+    returning_hint: dict | None = None
+    if similar and similar[0]["similarity"] >= 0.35:
+        top = similar[0]
+        returning_hint = {
+            "case_id":     top["id"],
+            "last_seen":   top["created_at"][:10],
+            "placed_at":   top.get("placed_at"),
+            "outcome":     top["outcome"],
+            "similarity":  top["similarity"],
+            "client_name": top.get("client_name", ""),
+        }
+
+    payload, method, nim_ms = await compile_needs_async(cleaned, similar_cases=similar)
     logger.info(f"[{rid}] compile method={method} latency={nim_ms:.0f}ms")
     logger.info(f"[{rid}] payload {payload.model_dump()}")
 
@@ -469,10 +523,27 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
         _, cpu_ms = cpu_result
 
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
+    ticket = build_tts_itinerary_script(itinerary_gpu, req.client_name)
+
     asyncio.create_task(asyncio.to_thread(
         _log_telemetry, "caseworker", payload, method, gpu_ms, itinerary_gpu,
         req.origin_lat, req.origin_lon,
     ))
+
+    # Persist case — fire-and-forget style (don't block the response)
+    case_id: str | None = None
+    if case_store and cw_id:
+        try:
+            case_id = case_store.save_case(
+                caseworker_id=cw_id,
+                client_name=req.client_name,
+                transcript=cleaned,
+                needs_payload=payload.model_dump(),
+                itinerary=itinerary_gpu,
+                ticket_text=ticket,
+            )
+        except Exception as exc:
+            logger.warning(f"[{rid}] case_store.save_case failed: {exc}")
 
     return {
         "crisis":                False,
@@ -483,8 +554,10 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
         "cpu_solve_ms":          round(cpu_ms, 2) if cpu_ms is not None else None,
         "speedup":               round(cpu_ms / gpu_ms, 1) if (cpu_ms is not None and gpu_ms and gpu_ms > 0) else None,
         "itinerary":             itinerary_gpu,
-        "ticket_text":           build_tts_itinerary_script(itinerary_gpu, req.client_name),
+        "ticket_text":           ticket,
         "eligibility_questions": [],
+        "case_id":               case_id,
+        "returning_hint":        returning_hint,
     }
 
 
@@ -623,3 +696,106 @@ async def handoff_script(req: HandoffRequest, request: Request):
         "facility": req.facility_name,
         "phone":    req.facility_phone,
     }
+
+
+# ── Case history endpoints ─────────────────────────────────────────────────────
+
+@app.get("/api/v1/caseworker/{caseworker_id}/history")
+async def caseworker_history(caseworker_id: str):
+    if not case_store:
+        raise HTTPException(status_code=503, detail="Case store not initialised")
+    cases = case_store.get_history(caseworker_id, limit=30)
+    # Deserialise JSON blobs so the frontend gets plain objects
+    for c in cases:
+        if c.get("needs_json"):
+            try:
+                c["needs"] = json.loads(c.pop("needs_json"))
+            except Exception:
+                c["needs"] = None
+                c.pop("needs_json", None)
+        if c.get("itinerary_json"):
+            try:
+                c["itinerary"] = json.loads(c.pop("itinerary_json"))
+            except Exception:
+                c["itinerary"] = None
+                c.pop("itinerary_json", None)
+    return {"cases": cases, "total": len(cases)}
+
+
+@app.patch("/api/v1/case/{case_id}/outcome")
+async def update_case_outcome(case_id: str, req: OutcomeUpdateRequest):
+    if not case_store:
+        raise HTTPException(status_code=503, detail="Case store not initialised")
+    ok = case_store.update_outcome(case_id, req.outcome, req.notes)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+    return {"case_id": case_id, "outcome": req.outcome}
+
+
+# ── Auth endpoints ─────────────────────────────────────────────────────────────
+
+@app.post("/api/v1/auth/register")
+async def auth_register(req: AuthRegisterRequest):
+    if not auth_store:
+        raise HTTPException(status_code=503, detail="Auth store not initialised")
+    try:
+        user = auth_store.create_user(req.email, req.name, req.password)
+    except ValueError as exc:
+        # ValueError from duplicate email check
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"auth register failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Registration error — check server logs")
+    token = auth_store.create_token(user)
+    return {"token": token, "user": user}
+
+
+@app.post("/api/v1/auth/login")
+async def auth_login(req: AuthLoginRequest):
+    if not auth_store:
+        raise HTTPException(status_code=503, detail="Auth store not initialised")
+    user = auth_store.authenticate(req.email, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = auth_store.create_token(user)
+    return {"token": token, "user": user}
+
+
+@app.get("/api/v1/auth/me")
+async def auth_me(request: Request):
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    payload = AuthStore.decode_token(auth_header[7:])
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user = auth_store.get_by_email(payload["sub"]) if auth_store else None
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+# ── Capacity endpoint (no LLM — fast poll target for the UI ticker) ────────────
+
+@app.get("/api/v1/capacity")
+async def capacity():
+    if not datasets_gpu:
+        raise HTTPException(status_code=503, detail="Datasets not loaded")
+    shelters = datasets_gpu.get("shelters")
+    if shelters is None:
+        raise HTTPException(status_code=503, detail="Shelter data unavailable")
+    try:
+        import pandas as pd
+        pdf = shelters.to_pandas() if hasattr(shelters, "to_pandas") else shelters
+        total     = int(pdf["CAPACITY_ACTUAL_BED"].sum())
+        available = int(pdf["UNOCCUPIED_BEDS"].sum())
+        occupied  = total - available
+        pct       = round(occupied / total * 100, 1) if total else 0.0
+        return {
+            "total_beds":     total,
+            "available_beds": available,
+            "occupied_beds":  occupied,
+            "occupancy_pct":  pct,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
