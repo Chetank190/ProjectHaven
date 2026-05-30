@@ -3,6 +3,7 @@ config.py
 All constants for Haven Matrix. No logic here — tune without touching other files.
 """
 
+import os
 from pathlib import Path
 from enum import Enum
 
@@ -23,9 +24,18 @@ OSM_JSON       = DATA_DIR / "osm_amenities.json"
 GTFS_STOPS_TXT = DATA_DIR / "stops.txt"
 
 # ── LLM Endpoints ─────────────────────────────────────────────────────────────
-NIM_ENDPOINT    = "http://localhost:30000/v1"   # llama.cpp (Nemotron)
-NIM_FALLBACK    = "http://localhost:8001/v1"    # NIM container (Llama 3.1 8B)
-NIM_MODEL       = "nemotron"
+# Tier 1 — NVIDIA cloud NIM (build.nvidia.com); requires NGC_API_KEY
+NVIDIA_CLOUD_ENDPOINT = os.environ.get("NVIDIA_CLOUD_ENDPOINT", "https://integrate.api.nvidia.com/v1")
+NVIDIA_CLOUD_MODEL    = os.environ.get("NVIDIA_CLOUD_MODEL",    "google/gemma-3n-e4b-it")
+
+# Tier 2 — local llama.cpp (Nemotron-30B on GX10 :30000)
+NIM_ENDPOINT    = os.environ.get("NIM_ENDPOINT",  "http://localhost:30000/v1")
+NEMOTRON_MODEL  = "nemotron"
+
+# Tier 3 — local NIM container (Gemma 3n E4B on GX10 :8001)
+NIM_FALLBACK    = os.environ.get("NIM_FALLBACK",  "http://localhost:8001/v1")
+NIM_MODEL       = "google/gemma-3n-e4b-it"
+
 NIM_TIMEOUT_SEC = 15
 NIM_MAX_RETRIES = 2
 

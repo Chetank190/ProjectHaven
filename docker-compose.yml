@@ -1,10 +1,10 @@
 version: "3.9"
 
 services:
-  # LLM inference — Llama 3.1 8B via NVIDIA NIM
+  # LLM inference — Gemma 3n E4B via NVIDIA NIM (NVFP4, Blackwell-optimized)
   # Alternative: start llama.cpp manually for Nemotron (see README §GX10 Setup)
   nim:
-    image: nvcr.io/nim/meta/llama-3.1-8b-instruct:latest
+    image: nvcr.io/nim/google/gemma-3n-e4b-it:latest
     runtime: nvidia
     environment:
       - NGC_API_KEY=${NGC_API_KEY}
@@ -30,8 +30,12 @@ services:
         uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
       "
     environment:
-      - NIM_ENDPOINT=http://nim:8000/v1
+      - NIM_ENDPOINT=http://localhost:30000/v1
       - NIM_FALLBACK=http://nim:8000/v1
+      - NVIDIA_CLOUD_ENDPOINT=https://integrate.api.nvidia.com/v1
+      - NVIDIA_CLOUD_MODEL=google/gemma-3n-e4b-it
+      - NGC_API_KEY=${NGC_API_KEY}
+      - NIM_API_KEY=${NIM_API_KEY:-not-needed}
     depends_on:
       - nim
     restart: unless-stopped

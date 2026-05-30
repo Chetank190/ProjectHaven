@@ -17,8 +17,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from openai import OpenAI
 from pydantic import BaseModel, field_validator
 from config import (
-    NIM_ENDPOINT, NIM_FALLBACK, NIM_MODEL, NIM_TIMEOUT_SEC,
-    NIM_MAX_RETRIES, NIM_TRIAGE_PROMPT, NIM_BRIEFING_PROMPT, NIM_HANDOFF_PROMPT,
+    NVIDIA_CLOUD_ENDPOINT, NVIDIA_CLOUD_MODEL,
+    NIM_ENDPOINT, NEMOTRON_MODEL,
+    NIM_FALLBACK, NIM_MODEL,
+    NIM_TIMEOUT_SEC, NIM_MAX_RETRIES,
+    NIM_TRIAGE_PROMPT, NIM_BRIEFING_PROMPT, NIM_HANDOFF_PROMPT,
 )
 
 
@@ -49,14 +52,26 @@ class NeedsPayload(BaseModel):
         return v if v in {"alone", "with_family", None} else None
 
 
+def _nim_tiers() -> list[tuple[str, str, str]]:
+    """Build ordered list of (endpoint, model, api_key) to try. Cloud skipped if no NGC key."""
+    ngc_key = os.environ.get("NGC_API_KEY", "")
+    nim_key = os.environ.get("NIM_API_KEY", "not-needed")
+    tiers = []
+    if ngc_key:
+        tiers.append((NVIDIA_CLOUD_ENDPOINT, NVIDIA_CLOUD_MODEL, ngc_key))
+    tiers.append((NIM_ENDPOINT, NEMOTRON_MODEL, nim_key))
+    tiers.append((NIM_FALLBACK, NIM_MODEL,      nim_key))
+    return tiers
+
+
 def compile_needs(text: str) -> tuple[NeedsPayload, str, float]:
     """Convert text → NeedsPayload. Returns (payload, method, latency_ms)."""
     t0 = time.perf_counter()
 
-    for endpoint in [NIM_ENDPOINT, NIM_FALLBACK]:
+    for endpoint, model, api_key in _nim_tiers():
         for attempt in range(NIM_MAX_RETRIES + 1):
             try:
-                raw = _call_nim(text, endpoint, NIM_TRIAGE_PROMPT)
+                raw = _call_nim(text, endpoint, NIM_TRIAGE_PROMPT, model=model, api_key=api_key)
                 payload = NeedsPayload(**raw)
                 return payload, "nim", (time.perf_counter() - t0) * 1000
             except Exception as e:
@@ -67,11 +82,11 @@ def compile_needs(text: str) -> tuple[NeedsPayload, str, float]:
 
 def generate_briefing(shelter_summary: str) -> str:
     """Summarize morning shelter data into plain-English shift briefing."""
-    for endpoint in [NIM_ENDPOINT, NIM_FALLBACK]:
+    for endpoint, model, api_key in _nim_tiers():
         try:
-            client = OpenAI(base_url=endpoint, api_key=os.environ.get("NIM_API_KEY", "not-needed"))
+            client = OpenAI(base_url=endpoint, api_key=api_key)
             resp = client.chat.completions.create(
-                model=NIM_MODEL,
+                model=model,
                 messages=[
                     {"role": "system", "content": NIM_BRIEFING_PROMPT},
                     {"role": "user",   "content": shelter_summary},
@@ -98,11 +113,11 @@ def generate_handoff_script(facility_name: str, payload: NeedsPayload) -> str:
         f"Has ID: {payload.has_id}. "
         f"Sobriety: {payload.sobriety_status}."
     )
-    for endpoint in [NIM_ENDPOINT, NIM_FALLBACK]:
+    for endpoint, model, api_key in _nim_tiers():
         try:
-            client = OpenAI(base_url=endpoint, api_key=os.environ.get("NIM_API_KEY", "not-needed"))
+            client = OpenAI(base_url=endpoint, api_key=api_key)
             resp = client.chat.completions.create(
-                model=NIM_MODEL,
+                model=model,
                 messages=[
                     {"role": "system", "content": NIM_HANDOFF_PROMPT},
                     {"role": "user",   "content": context},
@@ -126,11 +141,12 @@ def kiosk_voice_payload(needs_transcript: str, eligibility_answers: dict) -> Nee
     return NeedsPayload(**payload_dict)
 
 
-def _call_nim(text: str, endpoint: str, system_prompt: str) -> dict:
-    """Call NIM/llama.cpp endpoint and parse JSON response."""
-    client = OpenAI(base_url=endpoint, api_key=os.environ.get("NIM_API_KEY", "not-needed"))
+def _call_nim(text: str, endpoint: str, system_prompt: str,
+              model: str = None, api_key: str = "not-needed") -> dict:
+    """Call any OpenAI-compatible NIM endpoint and parse JSON response."""
+    client = OpenAI(base_url=endpoint, api_key=api_key)
     resp = client.chat.completions.create(
-        model=NIM_MODEL,
+        model=model or NIM_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": text},
