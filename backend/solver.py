@@ -19,6 +19,7 @@ from config import (
     WEIGHT_OCCUPANCY, WEIGHT_TRANSIT, TRANSIT_RADIUS_M,
 )
 from nim_compiler import NeedsPayload
+from data_ingestion import get_weather_alert
 
 
 def solve(
@@ -75,11 +76,15 @@ def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:
     masked = {}
 
     def elig(df):
-        """Simplified eligibility mask that works for both pandas and cuDF."""
+        """Eligibility mask — always returns a boolean Series, never a bare True."""
         try:
-            m_id  = (df["requires_id"].astype(bool) == False) if (payload.has_id is False and "requires_id" in df.columns) else True
-            m_sob = (df["harm_reduction"].astype(bool) == True) if (payload.sobriety_status == "using" and "harm_reduction" in df.columns) else True
-            return m_id & m_sob
+            import pandas as _pd
+            mask = _pd.Series([True] * len(df), index=df.index if hasattr(df, "index") else range(len(df)))
+            if payload.has_id is False and "requires_id" in df.columns:
+                mask = mask & (df["requires_id"].astype(bool) == False)
+            if payload.sobriety_status == "using" and "harm_reduction" in df.columns:
+                mask = mask & (df["harm_reduction"].astype(bool) == True)
+            return mask
         except Exception:
             return [True] * len(df)
 
@@ -130,6 +135,35 @@ def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:
                 datasets["osm"].to_pandas() if hasattr(datasets["osm"], "to_pandas") else datasets["osm"],
             ])
         masked["hygiene"] = hygiene_all.copy()
+
+    # ── Upstream prevention pillars ───────────────────────────────────────────
+    if payload.needs_respite:
+        df = datasets.get("respite")
+        if df is not None:
+            masked["respite"] = df[elig(df)].copy()
+
+    if payload.needs_youth_service:
+        df = datasets.get("youth_spaces")
+        if df is not None:
+            masked["youth"] = df.copy()
+
+    if payload.needs_library:
+        df = datasets.get("libraries")
+        if df is not None:
+            masked["library"] = df.copy()
+
+    # ── Weather boost: during EXTREME_COLD, inject respite into shelter pool ─
+    weather = get_weather_alert()
+    if weather == "EXTREME_COLD" and "shelter" in masked and datasets.get("respite") is not None:
+        try:
+            respite_df = datasets["respite"]
+            masked["shelter"] = pd_engine.concat([masked["shelter"], respite_df])
+            logger.info("[WEATHER] Extreme cold — respite sites added to shelter pool")
+        except Exception:
+            import pandas as pd
+            s = masked["shelter"].to_pandas() if hasattr(masked["shelter"], "to_pandas") else masked["shelter"]
+            r = respite_df.to_pandas() if hasattr(respite_df, "to_pandas") else respite_df
+            masked["shelter"] = pd.concat([s, r])
 
     return masked
 

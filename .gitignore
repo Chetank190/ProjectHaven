@@ -18,7 +18,6 @@ logs/
 # Claude Code
 CLAUDE.md
 .claude/
-learning/
 
 # Python extras
 build/

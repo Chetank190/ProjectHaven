@@ -24,19 +24,23 @@ Haven Matrix is a dual-gateway triage system for social services in Toronto:
 ## Quick Start (Local / MacBook)
 
 ```bash
-# 1. Install Python dependencies
+# 1. Create and activate a virtual environment
+python3 -m venv .vhaven
+source .vhaven/bin/activate   # Windows: .vhaven\Scripts\activate
+
+# 2. Install Python dependencies
 pip install -r backend/requirements.txt
 
-# 2. Verify datasets
+# 3. Verify datasets
 python backend/data_ingestion.py --verify --mode cpu
 
-# 3. Start FastAPI (port 8000)
+# 4. Start FastAPI (port 8000)
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 4. In a new terminal — start React (port 3000)
+# 5. In a new terminal — start React (port 3000)
 cd frontend && npm install && npm run dev
 
-# 5. Open browser
+# 6. Open browser
 # Caseworker: http://localhost:3000/caseworker
 # Kiosk:      http://localhost:3000/kiosk  (requires Chrome for voice)
 # Swagger:    http://localhost:8000/docs
@@ -44,23 +48,27 @@ cd frontend && npm install && npm run dev
 
 **NIM/LLM is optional for local dev.** The system falls back to regex keyword matching automatically when LLM endpoints are unreachable.
 
+> **GX10 access + GPU model setup:** see [`learning/gx10_access_and_gpu_guide.md`](learning/gx10_access_and_gpu_guide.md) (local team doc).
+
 ---
 
 ## Connecting to the GX10 (No Wi-Fi — SSH Required)
 
-The GX10 has **no Wi-Fi**. Connect via your **mobile hotspot** then SSH in.
+The GX10 has **no built-in Wi-Fi**. Remote access info is on the pamphlet in the box. Connect via **mobile hotspot** first, then optionally **Tailscale** for persistent access.
+
+> Full guide: [`learning/gx10_access_and_gpu_guide.md`](learning/gx10_access_and_gpu_guide.md)
 
 ### Step 1 — SSH over mobile hotspot
 
-Enable your mobile hotspot. The GX10 auto-connects to it.
+Connect **your laptop** to the GX10 hotspot (the GX10 auto-connects to saved hotspot profiles):
 
-**Hotspot credentials (connect your laptop to this network first):**
+**Your unit (gx10-3cd8):**
 | Field | Value |
 |-------|-------|
 | Hotspot SSID | `gx10-3cd8` |
 | Hotspot Password | `gx10-3cd8` |
 
-Open Terminal (Mac/Linux) or PowerShell as Admin (Windows):
+Open **Terminal** (Mac/Linux) or **PowerShell as Administrator** (Windows):
 
 ```bash
 ssh asus@gx10-3cd8.local
@@ -70,7 +78,7 @@ When prompted:
 - Type `yes` and press Enter
 - Password: `password`
 
-> Other units at the event use the same format (`gx10-XXXX.local`) but with their own 4-character ID from the MAC1 sticker under the unit.
+> **No pamphlet?** Flip the unit over → read the **MAC1** sticker → use the last 4 characters (e.g. `3C:D8` → `gx10-3cd8`). Other units use the same pattern: `ssh asus@gx10-XXXX.local`.
 
 ---
 
@@ -81,7 +89,7 @@ Install Tailscale on your laptop first: **https://tailscale.com/download**
 - Mac: allow all prompts, enable from the taskbar icon
 - Windows: enable from the hidden icon tray (right-click)
 
-Then on the GX10 terminal:
+Then on the GX10 terminal (Tailscale is pre-installed):
 
 ```bash
 sudo tailscale up
@@ -95,13 +103,15 @@ ssh asus@gx10-3cd8          # by hostname
 ssh asus@100.X.X.X          # by Tailscale IP (shown in Tailscale app)
 ```
 
-**Invite teammates to your tailnet:**
-1. Tailscale admin console → **Invite by email**
-2. Teammate installs Tailscale → joins with your host email → can then SSH in
+**Invite teammates:**
+- Team invite link: https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
+- Or Tailscale admin console → **Invite by email** → teammate joins **Host tailnet**
 
 ---
 
-### Step 3 — Remove mobile hotspot (optional, after switching to venue Wi-Fi)
+### Step 3 — Venue Wi-Fi + remove hotspot (requires monitor)
+
+The hotspot profile persists across reboots. To switch to venue Wi-Fi, connect a **monitor** to the GX10, pair venue Wi-Fi on the unit, then delete the hotspot profile:
 
 ```bash
 nmcli con show                        # list all connections
@@ -110,7 +120,31 @@ nmcli con delete gx10-3cd8-Hotspot   # delete so it doesn't reconnect on reboot
 
 ---
 
+### Use the UI from your laptop (SSH port-forward)
+
+```bash
+ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
+```
+
+Then open http://localhost:3000/caseworker on your laptop while services run on the GX10.
+
+---
+
 ## GX10 Software Setup (NVIDIA Grace Blackwell)
+
+Two GPU workloads must run for full demo mode: **LLM triage** (Nemotron on :30000 or Gemma NIM on :8001) and **KNN solver** (RAPIDS on :8000).
+
+### Option A — Docker Compose (fastest path to GPU backend + NIM fallback)
+
+```bash
+cd ~/ProjectHaven
+# Set NGC_API_KEY in .env if using cloud NIM tier
+docker compose up
+```
+
+Starts Gemma 3n NIM on :8001 and FastAPI + RAPIDS on :8000. Still start Nemotron separately (Option B Step 5) for primary LLM, or point `NIM_ENDPOINT` at :8001.
+
+### Option B — Manual setup (Nemotron + RAPIDS)
 
 ```bash
 # Step 1 — Verify hardware (run after SSH in)
@@ -128,7 +162,7 @@ huggingface-cli download ggml-org/NVIDIA-Nemotron-3-Nano-Omni \
 git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp && cmake -B build -DGGML_CUDA=ON && cmake --build build -j$(nproc)
 
-# Step 5 — Start Nemotron on port 30000
+# Step 5 — Start Nemotron on GPU port 30000
 ./build/bin/llama-server \
   --model ~/models/nemotron/nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf \
   --host 0.0.0.0 --port 30000 --n-gpu-layers 99 --ctx-size 8192
@@ -151,6 +185,8 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 cd frontend && npm run dev
 ```
 
+Verify: `curl http://localhost:8000/api/v1/health` → `rapids_mode: gpu`; route a caseworker request → `compile_method: nim`.
+
 ---
 
 ## Architecture
@@ -160,7 +196,7 @@ Caseworker (React :3000/caseworker)    Kiosk (React :3000/kiosk)
          │ HTTP POST via Vite proxy              │
          ▼                                       ▼
          FastAPI :8000
-         ├── NIM Compiler (Nemotron :30000 → regex fallback)
+         ├── NIM Compiler (cloud NIM → Nemotron :30000 → Gemma NIM :8001 → regex)
          └── RAPIDS Solver
              ├── cuDF: 7 datasets (290 shelters, 25 rehab,
              │         20 food, 15 hygiene, 20 grassroots,
@@ -189,7 +225,7 @@ Caseworker (React :3000/caseworker)    Kiosk (React :3000/kiosk)
 
 | Component | Primary | Fallback |
 |-----------|---------|----------|
-| LLM | Nemotron (llama.cpp :30000) | Llama 3.1 8B (NIM :8001) → regex |
+| LLM | Cloud NIM Gemma 3n (if `NGC_API_KEY`) → Nemotron (llama.cpp :30000) | Gemma 3n E4B (NIM :8001) → regex |
 | Data engine | cuDF + cuML (GPU) | pandas + scikit-learn (CPU) |
 | Shelter data | Toronto CKAN (live) | Cached `data/shelters.csv` |
 
@@ -201,9 +237,15 @@ Caseworker (React :3000/caseworker)    Kiosk (React :3000/kiosk)
 # .env (never commit)
 NGC_API_KEY=your_ngc_key_here
 
-# Optional
-NIM_ENDPOINT=http://localhost:30000/v1   # llama.cpp Nemotron
-VITE_KIOSK_HUB=Union Station            # Pre-configure kiosk location
+# LLM endpoints
+NIM_ENDPOINT=http://localhost:30000/v1          # llama.cpp Nemotron (GX10 primary)
+NIM_FALLBACK=http://localhost:8001/v1          # local NIM Gemma 3n container
+NVIDIA_CLOUD_ENDPOINT=https://integrate.api.nvidia.com/v1
+NVIDIA_CLOUD_MODEL=google/gemma-3n-e4b-it
+NIM_API_KEY=not-needed                         # override if your NIM server requires auth
+
+# Frontend
+VITE_KIOSK_HUB=Union Station                   # Pre-configure kiosk location
 ```
 
 ---

@@ -19,7 +19,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import (
     EngineMode, SHELTERS_CSV, REHAB_CSV, FOOD_CSV, HYGIENE_CSV,
     GRASSROOTS_CSV, OSM_JSON, GTFS_STOPS_TXT, SHELTER_CKAN_URL,
+    YOUTH_SPACES_CSV, LIBRARIES_CSV, RESPITE_CSV,
+    CKAN_STARTUP_TIMEOUT, CKAN_HYDRATE_TIMEOUT,
+    WEATHER_FEED_URL, WEATHER_TIMEOUT,
 )
+
+_weather_alert: str | None = None
 
 
 def load_all(mode: EngineMode = EngineMode.GPU) -> tuple[dict, float]:
@@ -47,12 +52,15 @@ def load_all(mode: EngineMode = EngineMode.GPU) -> tuple[dict, float]:
             shelters[col] = default
     datasets["shelters"] = shelters
 
-    # All other tabular datasets
+    # All other tabular datasets (core + upstream prevention pillars)
     for key, path in [
-        ("rehab",       REHAB_CSV),
-        ("food",        FOOD_CSV),
-        ("hygiene",     HYGIENE_CSV),
-        ("grassroots",  GRASSROOTS_CSV),
+        ("rehab",        REHAB_CSV),
+        ("food",         FOOD_CSV),
+        ("hygiene",      HYGIENE_CSV),
+        ("grassroots",   GRASSROOTS_CSV),
+        ("youth_spaces", YOUTH_SPACES_CSV),
+        ("libraries",    LIBRARIES_CSV),
+        ("respite",      RESPITE_CSV),
     ]:
         df = pd_engine.read_csv(path)
         df = _standardize_coords(df)
@@ -116,6 +124,62 @@ def _fetch_shelters_ckan(pd_engine):
     except Exception as e:
         logger.warning(f"CKAN fetch/merge failed ({e}), using local cache")
         return None
+
+
+def refresh_shelters(datasets: dict, mode: EngineMode = EngineMode.CPU) -> bool:
+    """Background re-hydration with 500ms fail-safe. Returns True if updated."""
+    if mode == EngineMode.GPU:
+        import cudf as pd_engine
+    else:
+        import pandas as pd_engine
+    try:
+        import requests
+        r = requests.get(SHELTER_CKAN_URL, timeout=CKAN_HYDRATE_TIMEOUT)
+        r.raise_for_status()
+        body = r.json()
+        if not body.get("success"):
+            return False
+        records = body["result"]["records"]
+        if not records:
+            return False
+        ckan_df = pd_engine.DataFrame(records) if hasattr(pd_engine, "DataFrame") else __import__("pandas").DataFrame(records)
+        if "LAT" not in ckan_df.columns:
+            return False
+        datasets["shelters"] = _standardize_coords(ckan_df, "LAT", "LON")
+        logger.info("[HYDRATE] Shelter occupancy refreshed from CKAN")
+        return True
+    except Exception as e:
+        logger.debug(f"[HYDRATE] 500ms cutoff or error: {e}")
+        return False
+
+
+def fetch_weather_alert() -> str | None:
+    """
+    Fetch Environment Canada RSS for Toronto warnings.
+    Returns 'EXTREME_COLD', 'EXTREME_HEAT', or None.
+    Governed by 500ms fail-safe.
+    """
+    global _weather_alert
+    try:
+        import requests
+        r = requests.get(WEATHER_FEED_URL, timeout=WEATHER_TIMEOUT)
+        r.raise_for_status()
+        content = r.text.lower()
+        if any(k in content for k in ["extreme cold", "wind chill warning", "frostbite"]):
+            _weather_alert = "EXTREME_COLD"
+        elif any(k in content for k in ["extreme heat", "heat warning", "humidex"]):
+            _weather_alert = "EXTREME_HEAT"
+        else:
+            _weather_alert = None
+        logger.info(f"[WEATHER] alert={_weather_alert}")
+    except Exception as e:
+        logger.debug(f"[WEATHER] 500ms cutoff or error ({e}), keeping previous: {_weather_alert}")
+    return _weather_alert
+
+
+def get_weather_alert() -> str | None:
+    """Return cached weather alert (never blocks)."""
+    return _weather_alert
 
 
 def _load_osm(pd_engine):

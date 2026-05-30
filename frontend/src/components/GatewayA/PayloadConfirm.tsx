@@ -6,12 +6,17 @@ interface Props {
   onConfirm: (p: NeedsPayload) => void;
 }
 
-const NEEDS_LABELS: { key: keyof NeedsPayload; label: string; icon: string }[] = [
-  { key: 'needs_shelter',  label: 'Needs a bed tonight',          icon: '🏠' },
-  { key: 'needs_rehab',    label: 'Needs detox / mental health',  icon: '🩺' },
-  { key: 'needs_food',     label: 'Needs food',                   icon: '🍽' },
-  { key: 'needs_supplies', label: 'Needs clothing or supplies',   icon: '🧥' },
-  { key: 'needs_hygiene',  label: 'Needs shower or hygiene',      icon: '🚿' },
+const NEEDS_LABELS: { key: keyof NeedsPayload; label: string; icon: string; group?: string }[] = [
+  // Acute crisis pillars
+  { key: 'needs_shelter',       label: 'Needs a bed tonight',               icon: '🏠', group: 'crisis' },
+  { key: 'needs_rehab',         label: 'Needs detox / mental health',       icon: '🩺', group: 'crisis' },
+  { key: 'needs_food',          label: 'Needs food',                        icon: '🍽', group: 'crisis' },
+  { key: 'needs_supplies',      label: 'Needs clothing or supplies',        icon: '🧥', group: 'crisis' },
+  { key: 'needs_hygiene',       label: 'Needs shower or hygiene',           icon: '🚿', group: 'crisis' },
+  // Upstream prevention pillars
+  { key: 'needs_respite',       label: 'Needs a warming / respite space',   icon: '🌡', group: 'upstream' },
+  { key: 'needs_youth_service', label: 'Youth programs (ages 13–24)',       icon: '🏫', group: 'upstream' },
+  { key: 'needs_library',       label: 'Internet / library access',         icon: '📚', group: 'upstream' },
 ];
 
 const SECTORS = ['any', 'adult', 'youth', 'family'] as const;
@@ -58,8 +63,11 @@ export function PayloadConfirm({ payload, onConfirm }: Props) {
       </div>
 
       <div className="p-5">
-        <div className="space-y-2 mb-5">
-          {NEEDS_LABELS.map(({ key, label, icon }) => {
+        {/* Group label: Acute Crisis */}
+        <div className="text-xs font-bold uppercase tracking-widest mb-2 mt-0"
+          style={{ color: '#1A7A9A' }}>Acute Crisis</div>
+        <div className="space-y-2 mb-4">
+          {NEEDS_LABELS.filter(n => n.group === 'crisis').map(({ key, label, icon }) => {
             const checked = Boolean(draft[key]);
             return (
               <label
@@ -75,6 +83,42 @@ export function PayloadConfirm({ payload, onConfirm }: Props) {
                   style={{
                     background: checked ? '#1A7A9A' : 'white',
                     border: `2px solid ${checked ? '#1A7A9A' : '#B0BDC7'}`,
+                  }}>
+                  {checked && (
+                    <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7"/>
+                    </svg>
+                  )}
+                </div>
+                <span className="text-base">{icon}</span>
+                <span className="text-sm font-medium" style={{ color: checked ? '#0A2A3D' : '#3D4D59' }}>
+                  {label}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        {/* Group label: Upstream Prevention */}
+        <div className="text-xs font-bold uppercase tracking-widest mb-2"
+          style={{ color: '#3A8A71' }}>Upstream Prevention</div>
+        <div className="space-y-2 mb-5">
+          {NEEDS_LABELS.filter(n => n.group === 'upstream').map(({ key, label, icon }) => {
+            const checked = Boolean(draft[key]);
+            return (
+              <label
+                key={key}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all"
+                style={{
+                  background: checked ? '#F0F7F4' : '#F5F7F8',
+                  border: `1px solid ${checked ? '#B4DBCD' : '#E9EDF0'}`,
+                }}
+                onClick={() => toggle(key)}
+              >
+                <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0"
+                  style={{
+                    background: checked ? '#3A8A71' : 'white',
+                    border: `2px solid ${checked ? '#3A8A71' : '#B0BDC7'}`,
                   }}>
                   {checked && (
                     <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">

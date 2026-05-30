@@ -1,15 +1,18 @@
 // All API request/response shapes. Import from here — never inline ad-hoc types.
 
 export interface NeedsPayload {
-  needs_shelter:   boolean;
-  needs_rehab:     boolean;
-  needs_food:      boolean;
-  needs_supplies:  boolean;
-  needs_hygiene:   boolean;
-  sector:          'youth' | 'adult' | 'family' | 'any';
-  has_id:          boolean | null;
-  sobriety_status: 'sober' | 'using' | null;
-  group_size:      'alone' | 'with_family' | null;
+  needs_shelter:       boolean;
+  needs_rehab:         boolean;
+  needs_food:          boolean;
+  needs_supplies:      boolean;
+  needs_hygiene:       boolean;
+  needs_youth_service: boolean;
+  needs_library:       boolean;
+  needs_respite:       boolean;
+  sector:              'youth' | 'adult' | 'family' | 'any';
+  has_id:              boolean | null;
+  sobriety_status:     'sober' | 'using' | null;
+  group_size:          'alone' | 'with_family' | null;
 }
 
 export interface ItineraryResult {
@@ -107,8 +110,28 @@ export interface BenchmarkResponse {
 export interface HealthResponse {
   status:        string;
   rapids_mode:   string;
+  weather_alert: string | null;
   datasets:      Record<string, number>;
   total_records: number;
+}
+
+export interface SystemResponse {
+  gpu_info: {
+    vram_used_gb:        number;
+    vram_total_gb:       number;
+    vram_free_gb:        number;
+    gpu_utilization_pct: number;
+    temperature_c:       number;
+  } | null;
+  weather_alert: string | null;
+}
+
+export interface TelemetrySummary {
+  total_routes:          number;
+  gateway_breakdown:     Record<string, number>;
+  most_requested_pillar: [string, number] | null;
+  pillar_request_counts: Record<string, number>;
+  avg_gpu_solve_ms:      number | null;
 }
 
 export interface ApiError {

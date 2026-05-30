@@ -22,8 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from config import EngineMode, KIOSK_HUBS, LOG_DIR, NIM_ENDPOINT
-from data_ingestion import load_all
+from config import EngineMode, KIOSK_HUBS, LOG_DIR, NIM_ENDPOINT, TELEMETRY_CSV
+from data_ingestion import load_all, fetch_weather_alert, get_weather_alert, refresh_shelters
 from nim_compiler import (
     NeedsPayload,
     compile_needs,
@@ -73,11 +73,41 @@ datasets_gpu: dict = {}
 datasets_cpu: dict = {}
 _last_benchmark: dict = {"gpu_ms": None, "cpu_ms": None}
 _rapids_mode: str = "cpu"
+_telemetry_header_written: bool = False
+
+
+def _log_telemetry(gateway: str, payload: NeedsPayload, compile_method: str,
+                   gpu_solve_ms: float, itinerary: dict,
+                   origin_lat: float, origin_lon: float) -> None:
+    """Append one row to the Shadow Census telemetry CSV."""
+    global _telemetry_header_written
+    import csv as _csv
+    from datetime import datetime, timezone
+    needs = [k.replace("needs_", "") for k, v in payload.model_dump().items()
+             if k.startswith("needs_") and v is True]
+    row = {
+        "timestamp":           datetime.now(timezone.utc).isoformat(),
+        "gateway":             gateway,
+        "needs_list":          "|".join(needs),
+        "compile_method":      compile_method,
+        "gpu_solve_ms":        round(gpu_solve_ms, 2),
+        "pillars_returned":    "|".join(k for k, v in itinerary.items() if v),
+        "origin_lat":          origin_lat,
+        "origin_lon":          origin_lon,
+        "weather_alert":       get_weather_alert() or "",
+    }
+    mode = "a" if _telemetry_header_written else "w"
+    with open(TELEMETRY_CSV, mode, newline="") as f:
+        writer = _csv.DictWriter(f, fieldnames=list(row.keys()))
+        if mode == "w":
+            writer.writeheader()
+            _telemetry_header_written = True
+        writer.writerow(row)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global datasets_gpu, datasets_cpu, _rapids_mode
+    global datasets_gpu, datasets_cpu, _rapids_mode, _telemetry_header_written
 
     _setup_logging()
 
@@ -91,16 +121,37 @@ async def lifespan(app: FastAPI):
         _rapids_mode = "cpu"
 
     datasets_cpu, _ = load_all(EngineMode.CPU)
-    logger.info(f"[READY] rapids_mode={_rapids_mode}")
+
+    # Fetch weather alert at startup (500ms fail-safe)
+    fetch_weather_alert()
+    logger.info(f"[READY] rapids_mode={_rapids_mode}  weather={get_weather_alert()}")
+
+    # Initialise telemetry CSV header
+    if not TELEMETRY_CSV.exists():
+        _telemetry_header_written = False
+    else:
+        _telemetry_header_written = True
 
     async def _session_gc():
         while True:
             await asyncio.sleep(60)
             _cleanup_expired()
 
-    gc_task = asyncio.create_task(_session_gc())
+    async def _hydration_loop():
+        """Refresh shelters every 4 hours + weather every 30 min."""
+        while True:
+            await asyncio.sleep(30 * 60)  # 30 min
+            fetch_weather_alert()
+            await asyncio.sleep(0)
+            # Shelter re-hydration every 4h
+            refresh_shelters(datasets_gpu, EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU)
+            refresh_shelters(datasets_cpu, EngineMode.CPU)
+
+    gc_task  = asyncio.create_task(_session_gc())
+    hyd_task = asyncio.create_task(_hydration_loop())
     yield
     gc_task.cancel()
+    hyd_task.cancel()
 
 
 # ── Request correlation middleware ────────────────────────────────────────────
@@ -173,6 +224,7 @@ async def health():
         "status":        "ok",
         "rapids_mode":   _rapids_mode,
         "nim_endpoint":  NIM_ENDPOINT,
+        "weather_alert": get_weather_alert(),
         "datasets":      {k: len(v) for k, v in datasets_gpu.items()},
         "total_records": sum(len(v) for v in datasets_gpu.values()),
     }
@@ -187,6 +239,67 @@ async def benchmark():
         "last_cpu_ms": cpu,
         "speedup":     round(cpu / gpu, 1) if (gpu and gpu > 0) else None,
     }
+
+
+@app.get("/api/v1/system")
+async def system_stats():
+    """Live GPU utilization via pynvml (available on GX10; graceful on dev machines)."""
+    gpu_info = None
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        mem    = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        util   = pynvml.nvmlDeviceGetUtilizationRates(handle)
+        temp   = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+        gpu_info = {
+            "vram_used_gb":        round(mem.used  / 1e9, 2),
+            "vram_total_gb":       round(mem.total / 1e9, 2),
+            "vram_free_gb":        round(mem.free  / 1e9, 2),
+            "gpu_utilization_pct": util.gpu,
+            "temperature_c":       temp,
+        }
+        pynvml.nvmlShutdown()
+    except Exception:
+        pass
+    return {"gpu_info": gpu_info, "weather_alert": get_weather_alert()}
+
+
+@app.get("/api/v1/telemetry/summary")
+async def telemetry_summary():
+    """Aggregate Shadow Census stats from daily_telemetry.csv."""
+    if not TELEMETRY_CSV.exists():
+        return {"total_routes": 0, "message": "No telemetry recorded yet."}
+    try:
+        import csv as _csv
+        from collections import Counter
+        rows = []
+        with open(TELEMETRY_CSV) as f:
+            reader = _csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            return {"total_routes": 0}
+        pillar_counts: Counter = Counter()
+        gpu_times = []
+        gateways: Counter = Counter()
+        for r in rows:
+            for p in r.get("pillars_returned", "").split("|"):
+                if p:
+                    pillar_counts[p] += 1
+            try:
+                gpu_times.append(float(r["gpu_solve_ms"]))
+            except (KeyError, ValueError):
+                pass
+            gateways[r.get("gateway", "unknown")] += 1
+        return {
+            "total_routes":          len(rows),
+            "gateway_breakdown":     dict(gateways),
+            "most_requested_pillar": pillar_counts.most_common(1)[0] if pillar_counts else None,
+            "pillar_request_counts": dict(pillar_counts),
+            "avg_gpu_solve_ms":      round(sum(gpu_times) / len(gpu_times), 2) if gpu_times else None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/v1/caseworker/route")
@@ -226,6 +339,8 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
         logger.warning(f"[{rid}] CPU benchmark failed: {e}")
         cpu_ms = None
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
+    _log_telemetry("caseworker", payload, method, gpu_ms, itinerary_gpu,
+                   req.origin_lat, req.origin_lon)
 
     return {
         "payload":               payload.model_dump(),
@@ -303,6 +418,8 @@ async def kiosk_route(req: KioskRouteRequest, request: Request):
         logger.warning(f"[{rid}] kiosk CPU benchmark failed: {e}")
         cpu_ms = None
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
+    _log_telemetry("kiosk", payload, "kiosk", gpu_ms, itinerary,
+                   session.origin[0], session.origin[1])
 
     return {
         "itinerary":    itinerary,

@@ -30,15 +30,18 @@ from config import (
 
 
 class NeedsPayload(BaseModel):
-    needs_shelter:   bool
-    needs_rehab:     bool
-    needs_food:      bool
-    needs_supplies:  bool
-    needs_hygiene:   bool
-    sector:          str = "any"
-    has_id:          bool | None = None
-    sobriety_status: str | None = None
-    group_size:      str | None = None
+    needs_shelter:       bool
+    needs_rehab:         bool
+    needs_food:          bool
+    needs_supplies:      bool
+    needs_hygiene:       bool
+    needs_youth_service: bool = False
+    needs_library:       bool = False
+    needs_respite:       bool = False
+    sector:              str = "any"
+    has_id:              bool | None = None
+    sobriety_status:     str | None = None
+    group_size:          str | None = None
 
     @field_validator("sector")
     @classmethod
@@ -204,11 +207,14 @@ def _regex_fallback(text: str) -> NeedsPayload:
     )
 
     return NeedsPayload(
-        needs_shelter=  match(["shelter", "bed", "sleep", "housing", "place to stay", "homeless", "somewhere to sleep"]),
-        needs_rehab=    match(["rehab", "detox", "withdrawal", "drug", "alcohol", "mental health", "crisis", "treatment"]),
-        needs_food=     match(["food", "hungry", "eat", "meal", "soup kitchen", "food bank", "haven't eaten"]),
-        needs_supplies= match(["clothing", "clothes", "jacket", "coat", "blanket", "warm", "supplies"]),
-        needs_hygiene=  match(["shower", "wash", "laundry", "hygiene", "washroom", "bathroom", "clean up"]),
+        needs_shelter=       match(["shelter", "bed", "sleep", "housing", "place to stay", "homeless", "somewhere to sleep"]),
+        needs_rehab=         match(["rehab", "detox", "withdrawal", "drug", "alcohol", "mental health", "crisis", "treatment"]),
+        needs_food=          match(["food", "hungry", "eat", "meal", "soup kitchen", "food bank", "haven't eaten"]),
+        needs_supplies=      match(["clothing", "clothes", "jacket", "coat", "blanket", "warm", "supplies"]),
+        needs_hygiene=       match(["shower", "wash", "laundry", "hygiene", "washroom", "bathroom", "clean up"]),
+        needs_youth_service= match(["youth program", "eys", "community centre", "after school", "young person", "teen needs", "youth space", "youth centre"]),
+        needs_library=       match(["library", "internet access", "wifi", "computer access", "digital", "online form", "tpl", "print"]),
+        needs_respite=       match(["warming centre", "day shelter", "respite", "somewhere warm", "just need to sit", "out of the cold", "daytime shelter"]),
         sector=sector,
         has_id=has_id,
         sobriety_status=sobriety,

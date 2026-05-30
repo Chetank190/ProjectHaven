@@ -16,13 +16,19 @@ class EngineMode(Enum):
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_DIR       = Path("data")
 LOG_DIR        = Path("logs")
-SHELTERS_CSV   = DATA_DIR / "shelters.csv"
-REHAB_CSV      = DATA_DIR / "rehab_services.csv"
-FOOD_CSV       = DATA_DIR / "food_banks.csv"
-HYGIENE_CSV    = DATA_DIR / "hygiene_stations.csv"
-GRASSROOTS_CSV = DATA_DIR / "grassroots_services.csv"
-OSM_JSON       = DATA_DIR / "osm_amenities.json"
-GTFS_STOPS_TXT = DATA_DIR / "stops.txt"
+SHELTERS_CSV    = DATA_DIR / "shelters.csv"
+REHAB_CSV       = DATA_DIR / "rehab_services.csv"
+FOOD_CSV        = DATA_DIR / "food_banks.csv"
+HYGIENE_CSV     = DATA_DIR / "hygiene_stations.csv"
+GRASSROOTS_CSV  = DATA_DIR / "grassroots_services.csv"
+OSM_JSON        = DATA_DIR / "osm_amenities.json"
+GTFS_STOPS_TXT  = DATA_DIR / "stops.txt"
+# Upstream prevention pillars (demand shedding)
+YOUTH_SPACES_CSV = DATA_DIR / "youth_spaces.csv"
+LIBRARIES_CSV    = DATA_DIR / "libraries.csv"
+RESPITE_CSV      = DATA_DIR / "respite_sites.csv"
+# Telemetry shadow census
+TELEMETRY_CSV    = DATA_DIR / "daily_telemetry.csv"
 
 # ── LLM Endpoints ─────────────────────────────────────────────────────────────
 # Tier 1 — NVIDIA cloud NIM (build.nvidia.com); requires NGC_API_KEY
@@ -45,6 +51,16 @@ SHELTER_CKAN_URL = (
     "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search"
     "?resource_id=42714176-4f05-44e6-b157-2b57f29b856a&limit=500"
 )
+CKAN_STARTUP_TIMEOUT  = 10    # seconds — initial load on startup
+CKAN_HYDRATE_TIMEOUT  = 0.5   # seconds — background refresh (500ms fail-safe)
+
+# ── Environment Canada Weather ─────────────────────────────────────────────────
+WEATHER_FEED_URL = "https://weather.gc.ca/rss/warning/on-94_e.xml"  # Toronto region
+WEATHER_TIMEOUT  = 0.5   # 500ms fail-safe for weather hydration
+
+# ── Upstream Prevention Constants ─────────────────────────────────────────────
+YOUTH_AGE_MIN = 13
+YOUTH_AGE_MAX = 24
 
 # ── Kiosk Hub Coordinates (Gateway B pre-configured locations) ─────────────────
 KIOSK_HUBS = {
@@ -82,15 +98,18 @@ single valid JSON object. Output NOTHING else — no explanation, no markdown, n
 
 JSON schema (all fields required):
 {
-  "needs_shelter":   <true|false>,
-  "needs_rehab":     <true|false>,
-  "needs_food":      <true|false>,
-  "needs_supplies":  <true|false>,
-  "needs_hygiene":   <true|false>,
-  "sector":          <"youth"|"adult"|"family"|"any">,
-  "has_id":          <true|false|null>,
-  "sobriety_status": <"sober"|"using"|null>,
-  "group_size":      <"alone"|"with_family"|null>
+  "needs_shelter":       <true|false>,
+  "needs_rehab":         <true|false>,
+  "needs_food":          <true|false>,
+  "needs_supplies":      <true|false>,
+  "needs_hygiene":       <true|false>,
+  "needs_youth_service": <true|false>,
+  "needs_library":       <true|false>,
+  "needs_respite":       <true|false>,
+  "sector":              <"youth"|"adult"|"family"|"any">,
+  "has_id":              <true|false|null>,
+  "sobriety_status":     <"sober"|"using"|null>,
+  "group_size":          <"alone"|"with_family"|null>
 }
 
 Field rules:
@@ -99,6 +118,9 @@ Field rules:
 - needs_food: true if person is hungry, needs food, a meal, food bank
 - needs_supplies: true if person needs clothing, blankets, winter gear
 - needs_hygiene: true if person needs a shower, laundry, washroom, or hygiene items
+- needs_youth_service: true if person is a youth (13-24) needing safe indoor space, programs, computers
+- needs_library: true if person needs internet access, computers, digital forms, daytime respite in a library
+- needs_respite: true if person needs a warming centre, daytime low-barrier shelter, or just somewhere safe and warm
 - sector: infer from age/demographic; default to "any"
 - has_id: only set if explicitly mentioned; otherwise null
 - sobriety_status: only set if explicitly mentioned; otherwise null
