@@ -143,12 +143,13 @@ def generate_handoff_script(facility_name: str, payload: NeedsPayload) -> str:
                 max_tokens=250,
                 timeout=NIM_TIMEOUT_SEC,
             )
-            return resp.choices[0].message.content.strip()
+            script = resp.choices[0].message.content.strip()
+            return _check_grounding(script, facility_name)
         except Exception as e:
             logger.warning(f"NIM handoff failed at {endpoint}: {e}")
 
     logger.warning("NIM handoff all tiers failed — returning placeholder")
-    return "Script unavailable — compose the call manually using the client's needs above."
+    return f"Script unavailable — compose the call manually. Facility: {facility_name}."
 
 
 async def compile_needs_async(text: str) -> tuple[NeedsPayload, str, float]:
@@ -169,6 +170,22 @@ def kiosk_voice_payload(needs_transcript: str, eligibility_answers: dict) -> Nee
     payload_dict = payload.model_dump()
     payload_dict.update({k: v for k, v in eligibility_answers.items() if v is not None})
     return NeedsPayload(**payload_dict)
+
+
+def _check_grounding(script: str, facility_name: str) -> str:
+    """
+    Verify the generated script mentions the actual facility.
+    If the LLM substituted or omitted the name, append a correction.
+    This is a lightweight guard — the LLM can't hallucinate a facility that
+    never arrived in its prompt, but it can forget to include the name.
+    """
+    if facility_name and facility_name.lower() not in script.lower():
+        logger.warning(
+            f"Grounding check: script missing facility name '{facility_name}' — "
+            "possible hallucination or omission; appending correction"
+        )
+        script += f"\n\n(Note: Please confirm you are calling {facility_name}.)"
+    return script
 
 
 def _call_nim(text: str, endpoint: str, system_prompt: str,

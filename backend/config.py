@@ -75,11 +75,24 @@ YOUTH_AGE_MAX = 24
 
 # ── Kiosk Hub Coordinates (Gateway B pre-configured locations) ─────────────────
 KIOSK_HUBS = {
-    "Union Station":      (43.6452, -79.3806),
-    "Yonge & Dundas":     (43.6561, -79.3802),
-    "Scarborough Centre": (43.7731, -79.2570),
-    "Regent Park":        (43.6584, -79.3606),
-    "Etobicoke Civic":    (43.6435, -79.5605),
+    # Downtown East — highest shelter density in Toronto (8,200+ beds nearby)
+    "Moss Park / Sherbourne":   (43.6530, -79.3680),   # 135 Sherbourne, 107 Jarvis, Seaton House
+    "Seaton House / George St": (43.6545, -79.3706),   # 339 George St — historic men's shelter hub
+    "Regent Park":              (43.6584, -79.3606),   # community hub + social housing services
+    # Downtown Core
+    "Union Station":            (43.6452, -79.3806),   # main transit hub — high foot traffic
+    "Yonge & Dundas":           (43.6561, -79.3802),   # central hub
+    # Downtown West
+    "Spadina & Dundas":         (43.6538, -79.4004),   # Scott Mission, Fred Victor services
+    "Parkdale":                 (43.6478, -79.4490),   # Eva's Initiatives, youth services
+    # Midtown
+    "Bloor & Christie":         (43.6620, -79.4200),   # CAMH area, midtown services
+    # Inner suburbs
+    "Danforth & Pape":          (43.6782, -79.3541),   # East York hub
+    # Outer suburbs
+    "Scarborough Centre":       (43.7731, -79.2570),   # eastern hub
+    "Etobicoke Civic":          (43.6435, -79.5605),   # western hub
+    "North York Centre":        (43.7680, -79.4130),   # northern hub
 }
 
 # ── Voice Session Timeouts ────────────────────────────────────────────────────

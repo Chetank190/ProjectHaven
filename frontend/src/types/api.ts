@@ -26,6 +26,7 @@ export interface ItineraryResult {
   occupancy_ratio:    number;
   transit_accessible: boolean;
   composite_score:    number;
+  open_now:           boolean;
   phone:              string;
   hours:              string;
   requires_id:        boolean;
@@ -45,11 +46,16 @@ export interface CaseworkerRouteRequest {
 }
 
 export interface CaseworkerRouteResponse {
+  crisis?:          boolean;
+  crisis_category?: string;
+  crisis_hotline?:  string;
+  hotline_name?:    string;
+  escalation_text?: string;
   payload:               NeedsPayload;
-  compile_method:        'nim' | 'regex';
+  compile_method:        'nim' | 'regex' | 'crisis_gate';
   nim_latency_ms:        number;
   gpu_solve_ms:          number;
-  cpu_solve_ms:          number;
+  cpu_solve_ms:          number | null;
   speedup:               number | null;
   itinerary:             Itinerary;
   ticket_text:           string;
@@ -63,10 +69,15 @@ export interface KioskSessionRequest {
 }
 
 export interface KioskSessionResponse {
-  session_id:             string;
-  payload_draft:          NeedsPayload;
+  crisis?:          boolean;
+  crisis_category?: string;
+  crisis_hotline?:  string;
+  hotline_name?:    string;
+  escalation_text?: string;
+  session_id:             string | null;
+  payload_draft:          NeedsPayload | null;
   eligibility_questions:  string[];
-  next_step:              'collect_eligibility' | 'route';
+  next_step:              'collect_eligibility' | 'route' | 'crisis';
 }
 
 export interface KioskRouteRequest {

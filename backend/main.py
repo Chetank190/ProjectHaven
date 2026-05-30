@@ -27,6 +27,7 @@ from config import (
     ASR_NIM_URL, ASR_CLOUD_URL, ASR_NIM_TIMEOUT,
 )
 from data_ingestion import load_all, fetch_weather_alert, get_weather_alert, refresh_shelters
+from crisis_gate import is_crisis, build_escalation_reply
 from guardrails_client import init_guardrails, check_input as guardrails_check
 from pii_scrubber import has_injection
 from nim_compiler import (
@@ -415,6 +416,28 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
         raise HTTPException(status_code=400, detail="Input could not be processed. Please rephrase.")
     logger.debug(f"[{rid}] guardrails={gr_reason}")
 
+    # Crisis gate — deterministic regex, no network, runs before any LLM call
+    crisis_detected, crisis_category = is_crisis(cleaned)
+    if crisis_detected:
+        logger.warning(f"[{rid}] crisis gate triggered category={crisis_category}")
+        reply = build_escalation_reply(crisis_category)
+        empty_payload = NeedsPayload(
+            needs_shelter=False, needs_rehab=False, needs_food=False,
+            needs_supplies=False, needs_hygiene=False,
+        )
+        return {
+            **reply,
+            "payload":               empty_payload.model_dump(),
+            "compile_method":        "crisis_gate",
+            "nim_latency_ms":        0,
+            "gpu_solve_ms":          0,
+            "cpu_solve_ms":          None,
+            "speedup":               None,
+            "itinerary":             {},
+            "ticket_text":           reply["escalation_text"],
+            "eligibility_questions": [],
+        }
+
     payload, method, nim_ms = await compile_needs_async(cleaned)
     logger.info(f"[{rid}] compile method={method} latency={nim_ms:.0f}ms")
     logger.info(f"[{rid}] payload {payload.model_dump()}")
@@ -452,6 +475,7 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
     ))
 
     return {
+        "crisis":                False,
         "payload":               payload.model_dump(),
         "compile_method":        method,
         "nim_latency_ms":        round(nim_ms, 1),
@@ -482,6 +506,19 @@ async def kiosk_session(req: KioskSessionRequest, request: Request):
         raise HTTPException(status_code=400, detail="I'm sorry, I can't process that. Please tell me what you need.")
     logger.debug(f"[{rid}] guardrails={gr_reason}")
 
+    # Crisis gate — deterministic regex, no network, runs before any LLM call
+    crisis_detected, crisis_category = is_crisis(cleaned)
+    if crisis_detected:
+        logger.warning(f"[{rid}] kiosk crisis gate triggered category={crisis_category}")
+        reply = build_escalation_reply(crisis_category)
+        return {
+            **reply,
+            "session_id":            None,
+            "payload_draft":         None,
+            "eligibility_questions": [],
+            "next_step":             "crisis",
+        }
+
     payload, method, nim_ms = await compile_needs_async(cleaned)
     logger.info(f"[{rid}] kiosk compile method={method} latency={nim_ms:.0f}ms")
     logger.info(f"[{rid}] kiosk payload {payload.model_dump()}")
@@ -491,6 +528,7 @@ async def kiosk_session(req: KioskSessionRequest, request: Request):
     logger.info(f"[{rid}] session={session.session_id} questions={len(questions)}")
 
     return {
+        "crisis":                False,
         "session_id":            session.session_id,
         "payload_draft":         payload.model_dump(),
         "eligibility_questions": questions,

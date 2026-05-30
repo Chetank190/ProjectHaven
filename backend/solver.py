@@ -5,9 +5,11 @@ Run: python backend/solver.py --benchmark
 """
 
 import logging
+import re
 import time
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -170,6 +172,97 @@ def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:
     return masked
 
 
+def is_open_now(hours_str: str, now: datetime = None) -> bool:
+    """
+    Parse common hours-string formats and check if the facility is currently open.
+    Fails open (returns True) when hours are missing or unparseable — we never
+    penalize a user for our inability to read the data.
+    """
+    if not hours_str:
+        return True
+    h = hours_str.strip().lower()
+    if h in ("", "n/a", "na", "unknown", "varies", "call for hours"):
+        return True
+    if re.search(r"24[/\s]?7|24\s*hours?|open\s*24|always\s*open", h):
+        return True
+
+    now = now or datetime.now()
+    cur_day  = now.weekday()          # 0=Mon … 6=Sun
+    cur_min  = now.hour * 60 + now.minute
+
+    _DAY = {
+        "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+    }
+
+    def _parse_time(s: str) -> int:
+        s = s.strip().lower().replace(".", ":")
+        pm = "pm" in s
+        am = "am" in s
+        s  = re.sub(r"[ap]m", "", s).strip()
+        pts = re.split(r"[:\s]", s)
+        try:
+            hv = int(pts[0])
+            mv = int(pts[1]) if len(pts) > 1 else 0
+        except (ValueError, IndexError):
+            return -1
+        if pm and hv != 12:
+            hv += 12
+        if am and hv == 12:
+            hv = 0
+        return hv * 60 + mv
+
+    def _parse_days(s: str) -> list[int]:
+        s = s.strip().lower()
+        if s in ("daily", "every day", "7 days", "all week", "weekdays & weekends"):
+            return list(range(7))
+        if s in ("weekdays", "monday to friday", "mon-fri", "mon to fri"):
+            return list(range(5))
+        if s in ("weekends",):
+            return [5, 6]
+        m = re.search(r"(\w+)\s*(?:[-–]|to)\s*(\w+)", s)
+        if m:
+            a, b = _DAY.get(m.group(1)), _DAY.get(m.group(2))
+            if a is not None and b is not None:
+                return list(range(a, b + 1)) if b >= a else list(range(a, 7)) + list(range(0, b + 1))
+        d = _DAY.get(s)
+        return [d] if d is not None else list(range(7))
+
+    def _in_range(open_t: int, close_t: int) -> bool:
+        if open_t < 0 or close_t < 0:
+            return True  # unparseable → fail open
+        if close_t > open_t:
+            return open_t <= cur_min <= close_t
+        return cur_min >= open_t or cur_min <= close_t  # overnight
+
+    # Pattern: "Day(s) HH:MM[am/pm] - HH:MM[am/pm]"
+    m = re.search(
+        r"([a-z\s\-–to]+?)\s+"
+        r"(\d{1,2}[:.]\d{2}(?:\s*[ap]m)?|\d{1,2}\s*[ap]m)"
+        r"\s*[-–to]+\s*"
+        r"(\d{1,2}[:.]\d{2}(?:\s*[ap]m)?|\d{1,2}\s*[ap]m)",
+        h,
+    )
+    if m:
+        days = _parse_days(m.group(1))
+        if cur_day in days:
+            return _in_range(_parse_time(m.group(2)), _parse_time(m.group(3)))
+        return False
+
+    # Pattern: time range only (applies every day) "9:00 am - 5:00 pm"
+    m = re.search(
+        r"(\d{1,2}[:.]\d{2}(?:\s*[ap]m)?|\d{1,2}\s*[ap]m)"
+        r"\s*[-–to]+\s*"
+        r"(\d{1,2}[:.]\d{2}(?:\s*[ap]m)?|\d{1,2}\s*[ap]m)",
+        h,
+    )
+    if m:
+        return _in_range(_parse_time(m.group(1)), _parse_time(m.group(2)))
+
+    return True  # unrecognised format → fail open
+
+
 def _score_and_rank(df, indices, distances_km, stops_df, pillar_name: str) -> list:
     """Compute composite score and return sorted result list."""
     try:
@@ -187,16 +280,22 @@ def _score_and_rank(df, indices, distances_km, stops_df, pillar_name: str) -> li
     pdf = df.to_pandas() if hasattr(df, "to_pandas") else df
     stops_pdf = stops_df.to_pandas() if hasattr(stops_df, "to_pandas") else stops_df
 
+    now = datetime.now()
     for idx, dist_km in zip(idx_list, dist_list):
-        row = pdf.iloc[int(idx)]
+        row     = pdf.iloc[int(idx)]
         occ_raw = row.get("occupancy_ratio")
         occ     = float(occ_raw) if occ_raw is not None else 0.5
         transit = _check_transit(float(row["lat"]), float(row["lon"]), stops_pdf)
+        hours   = str(row.get("hours", ""))
+        open_now = is_open_now(hours, now)
         score   = (
             WEIGHT_DISTANCE  * (dist_km / max_dist) +
             WEIGHT_OCCUPANCY * occ +
             WEIGHT_TRANSIT   * (0.0 if transit else 1.0)
         )
+        # Closed facilities sink to the bottom; never hidden in case they're the only option
+        if not open_now:
+            score += 2.0
 
         results.append({
             "pillar":             pillar_name,
@@ -219,8 +318,9 @@ def _score_and_rank(df, indices, distances_km, stops_df, pillar_name: str) -> li
             "occupancy_ratio":    round(occ, 2),
             "transit_accessible": transit,
             "composite_score":    round(score, 4),
+            "open_now":           open_now,
             "phone":              str(row.get("phone", "")),
-            "hours":              str(row.get("hours", "")),
+            "hours":              hours,
             "requires_id":        bool(row.get("requires_id", False)),
             "harm_reduction":     bool(row.get("harm_reduction", True)),
             "bypass_pathway":     str(row.get("bypass_pathway", "")),

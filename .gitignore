@@ -47,3 +47,24 @@ frontend/.env.local
 # IDE
 .idea/
 .vscode/
+
+# EDA — exploratory work only, not required to run the application.
+# Contains a 660 MB Windows venv, 166 MB raw CSVs, and generated artefacts.
+EDA/
+
+# Large generated / binary files (>11 MB rule)
+*.parquet
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.db
+*.sqlite
+*.zip
+*.tar.gz
+*.tar.bz2
+
+# Scratch / temporary
+scratch/
+tmp/
+temp/

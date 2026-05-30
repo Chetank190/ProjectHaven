@@ -43,12 +43,20 @@ function ResultCard({ result, onHandoff }: { result: ItineraryResult; onHandoff?
             {result.pillar}
           </span>
         </div>
-        {result.transit_accessible && (
-          <span className="text-xs font-medium px-2 py-0.5 rounded-full"
-            style={{ background: '#D9EDE6', color: '#1D4238' }}>
-            🚌 TTC
-          </span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {result.transit_accessible && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+              style={{ background: '#D9EDE6', color: '#1D4238' }}>
+              🚌 TTC
+            </span>
+          )}
+          {result.open_now === false && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+              style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A' }}>
+              Closed now
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="px-4 py-3">

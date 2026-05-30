@@ -80,12 +80,20 @@ export function KioskItinerary({ itinerary, ttsScript, onReset }: Props) {
                     {pillar}
                   </span>
                 </div>
-                {result.transit_accessible && (
-                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                    style={{ background: 'rgba(58,138,113,0.2)', color: '#80C0AA' }}>
-                    🚌 TTC nearby
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {result.transit_accessible && (
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                      style={{ background: 'rgba(58,138,113,0.2)', color: '#80C0AA' }}>
+                      🚌 TTC nearby
+                    </span>
+                  )}
+                  {result.open_now === false && (
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                      style={{ background: 'rgba(217,119,6,0.2)', color: '#FBBF24' }}>
+                      Closed now
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="px-5 py-4">

@@ -14,7 +14,7 @@ import { ShiftBriefing }  from './ShiftBriefing';
 import { BenchmarkPanel }    from '../shared/BenchmarkPanel';
 import { HavenMatrixLogo }   from '../shared/HavenMatrixLogo';
 
-type Step = 'idle' | 'compiled' | 'confirmed' | 'routed';
+type Step = 'idle' | 'compiled' | 'confirmed' | 'routed' | 'crisis';
 
 export function CaseworkerPage() {
   const [step,          setStep]          = useState<Step>('idle');
@@ -40,6 +40,11 @@ export function CaseworkerPage() {
         origin_lon:  originLon,
         client_name: clientName || undefined,
       });
+      if (r.data.crisis) {
+        setRouteResult(r.data);
+        setStep('crisis');
+        return;
+      }
       setPayload(r.data.payload);
       setRouteResult(r.data);
       setStep('compiled');
@@ -141,6 +146,36 @@ export function CaseworkerPage() {
         {step === 'idle'     && <VoiceInput onSubmit={handleTextSubmit} loading={loading} />}
         {step === 'compiled' && payload && <PayloadConfirm payload={payload} onConfirm={handleConfirm} />}
 
+        {step === 'crisis' && routeResult?.crisis && (
+          <div className="rounded-2xl p-6 space-y-4"
+            style={{ background: '#FFF8E1', border: '2px solid #FBBF24' }}>
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🆘</span>
+              <div>
+                <div className="font-bold text-lg" style={{ color: '#92400E' }}>Crisis Detected</div>
+                <div className="text-sm font-medium" style={{ color: '#B45309' }}>
+                  {routeResult.hotline_name} — {routeResult.crisis_hotline}
+                </div>
+              </div>
+            </div>
+            <p className="text-base leading-relaxed" style={{ color: '#1A2330' }}>
+              {routeResult.escalation_text}
+            </p>
+            <div className="flex gap-3">
+              <a href={`tel:${routeResult.crisis_hotline}`}
+                className="font-bold px-5 py-2.5 rounded-xl text-white text-base transition"
+                style={{ background: '#D97706' }}>
+                Call {routeResult.crisis_hotline}
+              </a>
+              <button onClick={reset}
+                className="font-medium px-5 py-2.5 rounded-xl text-sm transition"
+                style={{ background: '#FDE68A', color: '#92400E', border: '1px solid #FBBF24' }}>
+                New Client
+              </button>
+            </div>
+          </div>
+        )}
+
         {step === 'routed' && routeResult && (
           <>
             {/* Latency strip */}
@@ -155,9 +190,11 @@ export function CaseworkerPage() {
               <span className="px-2.5 py-1 rounded-md font-mono" style={{ background: '#E9EDF0', color: '#506170' }}>
                 GPU {routeResult.gpu_solve_ms.toFixed(1)} ms
               </span>
-              <span className="px-2.5 py-1 rounded-md font-mono" style={{ background: '#E9EDF0', color: '#506170' }}>
-                CPU {routeResult.cpu_solve_ms.toFixed(1)} ms
-              </span>
+              {routeResult.cpu_solve_ms != null && (
+                <span className="px-2.5 py-1 rounded-md font-mono" style={{ background: '#E9EDF0', color: '#506170' }}>
+                  CPU {routeResult.cpu_solve_ms.toFixed(1)} ms
+                </span>
+              )}
               {routeResult.speedup && (
                 <span className="px-2.5 py-1 rounded-md font-semibold"
                   style={{ background: '#D9EDE6', color: '#1D4238' }}>

@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { VOICE_HOLD_MAX_MS, VOICE_SILENCE_KILL_MS } from '../../config';
 
 export interface SpeechState {
@@ -19,67 +19,132 @@ export interface SpeechControls {
   clearTranscript:  () => void;
 }
 
-export function useSpeech(): SpeechState & SpeechControls {
-  const [isListening,  setListening]  = useState(false);
-  const [isRecording,  setRecording]  = useState(false);
-  const [isSpeaking,   setSpeaking]   = useState(false);
-  const [transcript,   setTranscript] = useState('');
+// TTS voices load async — cache them once the browser fires voiceschanged
+let cachedVoices: SpeechSynthesisVoice[] = [];
+if (typeof window !== 'undefined') {
+  const load = () => { cachedVoices = window.speechSynthesis.getVoices(); };
+  load();
+  window.speechSynthesis.addEventListener('voiceschanged', load);
+}
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const mediaRecRef    = useRef<MediaRecorder | null>(null);
-  const audioChunks    = useRef<Blob[]>([]);
-  const hardCapRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const silenceRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+export function useSpeech(): SpeechState & SpeechControls {
+  const [isListening, setListening] = useState(false);
+  const [isRecording, setRecording] = useState(false);
+  const [isSpeaking,  setSpeaking]  = useState(false);
+  const [transcript,  setTranscript] = useState('');
+
+  const recognitionRef   = useRef<SpeechRecognition | null>(null);
+  const mediaRecRef      = useRef<MediaRecorder | null>(null);
+  const audioChunks      = useRef<Blob[]>([]);
+  const hardCapRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Track intent so auto-restart knows when NOT to restart
+  const wantListeningRef  = useRef(false);
+  const continuousModeRef = useRef(false);
+  // Accumulate confirmed-final text across restarts so it isn't lost
+  const finalTextRef      = useRef('');
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  if (!SR) {
-    console.warn('[useSpeech] webkitSpeechRecognition not available. Chrome required.');
-  }
+  useEffect(() => {
+    if (!SR) console.warn('[useSpeech] webkitSpeechRecognition unavailable — Chrome required.');
+  }, []);
 
   const clearTimers = () => {
     if (hardCapRef.current) clearTimeout(hardCapRef.current);
     if (silenceRef.current) clearTimeout(silenceRef.current);
   };
 
-  const startListening = useCallback((continuous = false) => {
-    if (!SR || isListening) return;
-    setTranscript('');
-
+  const _buildRecognizer = useCallback(() => {
+    if (!SR) return null;
     const sr = new SR();
-    sr.continuous     = continuous;
+    sr.continuous     = continuousModeRef.current;
     sr.interimResults = true;
-    sr.lang           = 'en-CA';
+    sr.lang           = 'en-IN';
+
+    sr.onstart = () => setListening(true);
 
     sr.onresult = (e: SpeechRecognitionEvent) => {
-      const t = Array.from(e.results).map((r: SpeechRecognitionResult) => r[0].transcript).join('');
-      setTranscript(t);
-      // Reset silence timer on each result
+      // Process only newly arrived results from e.resultIndex onward
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalTextRef.current += e.results[i][0].transcript + ' ';
+        }
+      }
+      // Current interim segment (last non-final result, if any)
+      const lastResult = e.results[e.results.length - 1];
+      const interim = !lastResult.isFinal ? lastResult[0].transcript : '';
+      setTranscript((finalTextRef.current + interim).trimEnd());
+
+      // Reset silence timer on every speech event
       if (silenceRef.current) clearTimeout(silenceRef.current);
-      silenceRef.current = setTimeout(() => {
-        sr.stop();
-      }, VOICE_SILENCE_KILL_MS);
+      silenceRef.current = setTimeout(() => sr.stop(), VOICE_SILENCE_KILL_MS);
     };
 
     sr.onend = () => {
       clearTimers();
-      setListening(false);
+      // Auto-restart if the caller still wants continuous listening
+      // (Chrome terminates recognition on network blips or ~60s timeout)
+      if (wantListeningRef.current && continuousModeRef.current) {
+        setTimeout(() => {
+          if (!wantListeningRef.current) return;
+          const newSr = _buildRecognizer();
+          if (!newSr) return;
+          try {
+            newSr.start();
+            recognitionRef.current = newSr;
+            // Don't reset finalTextRef — preserve accumulated transcript
+          } catch { wantListeningRef.current = false; setListening(false); }
+        }, 150);
+      } else {
+        wantListeningRef.current = false;
+        setListening(false);
+      }
     };
 
-    sr.onerror = () => {
+    sr.onerror = (e: SpeechRecognitionErrorEvent) => {
       clearTimers();
-      setListening(false);
+      console.warn('[useSpeech] error:', e.error, e.message);
+      // 'no-speech' and 'aborted' are benign — let onend handle restart
+      if (e.error === 'not-allowed') {
+        wantListeningRef.current = false;
+        setListening(false);
+      }
     };
 
-    sr.start();
-    recognitionRef.current = sr;
-    setListening(true);
+    return sr;
+  }, [SR]);
 
-    // Hard cap
-    hardCapRef.current = setTimeout(() => sr.stop(), VOICE_HOLD_MAX_MS);
-  }, [SR, isListening]);
+  const startListening = useCallback((continuous = false) => {
+    if (!SR || wantListeningRef.current) return;
+
+    // Reset state for a fresh session
+    finalTextRef.current    = '';
+    continuousModeRef.current = continuous;
+    wantListeningRef.current  = true;
+    setTranscript('');
+
+    const sr = _buildRecognizer();
+    if (!sr) return;
+
+    try {
+      sr.start();
+    } catch (err) {
+      console.warn('[useSpeech] sr.start() threw:', err);
+      wantListeningRef.current = false;
+      return;
+    }
+    recognitionRef.current = sr;
+
+    // Hard cap only applies to the initial session, not auto-restarts
+    if (!continuous) {
+      hardCapRef.current = setTimeout(() => sr.stop(), VOICE_HOLD_MAX_MS);
+    }
+  }, [SR, _buildRecognizer]);
 
   const stopListening = useCallback(() => {
+    wantListeningRef.current = false;
     clearTimers();
     recognitionRef.current?.stop();
     setListening(false);
@@ -87,11 +152,18 @@ export function useSpeech(): SpeechState & SpeechControls {
 
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Explicit audio constraints improve quality in noisy environments (kiosk)
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation:  true,
+          noiseSuppression:  true,
+          autoGainControl:   true,
+        },
+      });
       const mr = new MediaRecorder(stream);
       audioChunks.current = [];
       mr.ondataavailable = e => { if (e.data.size > 0) audioChunks.current.push(e.data); };
-      mr.start(250);  // collect a chunk every 250ms so final blob is complete
+      mr.start(250);
       mediaRecRef.current = mr;
       setRecording(true);
     } catch (e) {
@@ -104,7 +176,6 @@ export function useSpeech(): SpeechState & SpeechControls {
     if (!mr) return Promise.resolve(null);
     mediaRecRef.current = null;
     setRecording(false);
-    // Wait for onstop — fires after the final ondataavailable, so all chunks are captured
     return new Promise(resolve => {
       mr.onstop = () => {
         mr.stream.getTracks().forEach(t => t.stop());
@@ -129,14 +200,14 @@ export function useSpeech(): SpeechState & SpeechControls {
 
   const speak = useCallback((text: string, onEnd?: () => void) => {
     window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang  = 'en-CA';
-    utt.rate  = 0.9;
-    utt.pitch = 0.85;  // calmer, less robotic than default 1.0
-    // Prefer a soft, natural voice — falls back to system default if none found
-    const voices = window.speechSynthesis.getVoices();
+    const utt  = new SpeechSynthesisUtterance(text);
+    utt.lang   = 'en-US'; // en-IN TTS voices are rarely installed; en-US is always present
+    utt.rate   = 0.9;
+    utt.pitch  = 0.85;
     const preferred = ['Google UK English Female', 'Samantha', 'Karen', 'Moira', 'Google US English'];
-    const voice = preferred.map(n => voices.find(v => v.name === n)).find(Boolean);
+    // Use cached voices (populated by voiceschanged event at module load)
+    const voices = cachedVoices.length ? cachedVoices : window.speechSynthesis.getVoices();
+    const voice  = preferred.map(n => voices.find(v => v.name === n)).find(Boolean);
     if (voice) utt.voice = voice;
     utt.onstart = () => setSpeaking(true);
     utt.onend   = () => { setSpeaking(false); onEnd?.(); };
@@ -149,7 +220,10 @@ export function useSpeech(): SpeechState & SpeechControls {
     setSpeaking(false);
   }, []);
 
-  const clearTranscript = useCallback(() => setTranscript(''), []);
+  const clearTranscript = useCallback(() => {
+    finalTextRef.current = '';
+    setTranscript('');
+  }, []);
 
   return {
     isListening, isRecording, isSpeaking, transcript,

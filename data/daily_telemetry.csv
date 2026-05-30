@@ -1,3 +1,0 @@
-timestamp,gateway,needs_list,compile_method,gpu_solve_ms,pillars_returned,origin_lat,origin_lon,weather_alert
-2026-05-30T16:16:23.857666+00:00,caseworker,supplies|youth_service|library|respite,regex,111.18,supplies|respite|youth|library,43.6532,-79.3832,
-2026-05-30T16:37:48.210215+00:00,caseworker,shelter,regex,49.3,shelter,43.6532,-79.3832,

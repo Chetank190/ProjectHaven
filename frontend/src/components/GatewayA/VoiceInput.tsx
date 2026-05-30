@@ -27,7 +27,7 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
     const sr = new SpeechRecognitionAPI();
     sr.continuous     = false;
     sr.interimResults = true;
-    sr.lang           = 'en-CA';
+    sr.lang           = 'en-IN';
     sr.onresult = (e: SpeechRecognitionEvent) => {
       const t = Array.from(e.results).map((r: SpeechRecognitionResult) => r[0].transcript).join('');
       setText(t);
