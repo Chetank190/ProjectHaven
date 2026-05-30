@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  # LLM inference — Llama 3.1 8B via NVIDIA NIM
+  # Alternative: start llama.cpp manually for Nemotron (see README §GX10 Setup)
+  nim:
+    image: nvcr.io/nim/meta/llama-3.1-8b-instruct:latest
+    runtime: nvidia
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      - NIM_CACHE_PATH=/opt/nim/.cache
+    volumes:
+      - nim-cache:/opt/nim/.cache
+    ports:
+      - "8001:8000"           # NIM OpenAI API on host :8001
+    restart: unless-stopped
+
+  # FastAPI backend — runs inside RAPIDS container for cuDF/cuML
+  backend:
+    image: rapidsai/base:25.06-cuda12-py3.12
+    runtime: nvidia
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"           # FastAPI on host :8000
+    command: >
+      bash -c "
+        pip install -r backend/requirements.txt -q &&
+        uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    environment:
+      - NIM_ENDPOINT=http://nim:8000/v1
+      - NIM_FALLBACK=http://nim:8000/v1
+    depends_on:
+      - nim
+    restart: unless-stopped
+
+volumes:
+  nim-cache:
