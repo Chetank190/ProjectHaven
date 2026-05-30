@@ -1,3 +1,4 @@
+// Kiosk VoiceOrb — calming ocean blues. No red. Designed for people in distress.
 type OrbState = 'idle' | 'listening' | 'processing' | 'speaking';
 
 interface Props {
@@ -7,37 +8,43 @@ interface Props {
 }
 
 const STATE_CONFIG: Record<OrbState, {
-  orbBg:   string;
-  ringColor: string;
-  glowColor: string;
-  label:   string;
-  pulseColor?: string;
+  orbGradient: string;
+  ringColor:   string;
+  glowColor:   string;
+  glowOuter:   string;
+  label:       string;
 }> = {
+  // Idle: deep, calm navy — stable and trustworthy
   idle: {
-    orbBg:    'linear-gradient(135deg, #3D0B15, #7D1A2A)',
-    ringColor: 'rgba(184,115,51,0.6)',
-    glowColor: 'rgba(125,26,42,0.4)',
-    label:    'Hold to speak',
+    orbGradient: 'linear-gradient(135deg, #0A2A3D 0%, #155F79 60%, #1A7A9A 100%)',
+    ringColor:   'rgba(26,147,187,0.5)',
+    glowColor:   'rgba(26,147,187,0.15)',
+    glowOuter:   'rgba(10,42,61,0.3)',
+    label:       'Hold to speak',
   },
+  // Listening: brighter, warm blue — attentive and present
   listening: {
-    orbBg:    'linear-gradient(135deg, #7D1A2A, #C23B52)',
-    ringColor: 'rgba(194,59,82,0.9)',
-    glowColor: 'rgba(194,59,82,0.6)',
-    label:    'Listening…',
-    pulseColor: 'rgba(194,59,82,0.25)',
+    orbGradient: 'linear-gradient(135deg, #1A7A9A 0%, #1A93BB 60%, #38AED2 100%)',
+    ringColor:   'rgba(56,174,210,0.8)',
+    glowColor:   'rgba(56,174,210,0.3)',
+    glowOuter:   'rgba(26,147,187,0.2)',
+    label:       'Listening…',
   },
+  // Processing: teal-blue — working, calm
   processing: {
-    orbBg:    'linear-gradient(135deg, #6A2B11, #B44A1F)',
-    ringColor: 'rgba(180,74,31,0.8)',
-    glowColor: 'rgba(180,74,31,0.5)',
-    label:    'Finding help…',
+    orbGradient: 'linear-gradient(135deg, #0F4259 0%, #1A7A9A 100%)',
+    ringColor:   'rgba(26,147,187,0.7)',
+    glowColor:   'rgba(26,122,154,0.25)',
+    glowOuter:   'rgba(15,66,89,0.2)',
+    label:       'Finding help…',
   },
+  // Speaking: sage green — healing, positive, hopeful
   speaking: {
-    orbBg:    'linear-gradient(135deg, #5A3515, #B87333)',
-    ringColor: 'rgba(184,115,51,0.9)',
-    glowColor: 'rgba(184,115,51,0.5)',
-    label:    "Here's what I found…",
-    pulseColor: 'rgba(184,115,51,0.2)',
+    orbGradient: 'linear-gradient(135deg, #1D4238 0%, #2E6E59 50%, #3A8A71 100%)',
+    ringColor:   'rgba(58,138,113,0.8)',
+    glowColor:   'rgba(58,138,113,0.3)',
+    glowOuter:   'rgba(29,66,56,0.2)',
+    label:       "Here's what I found…",
   },
 };
 
@@ -54,48 +61,46 @@ export function VoiceOrb({ state, onPointerDown, onPointerUp }: Props) {
     >
       <div className="relative flex items-center justify-center">
 
-        {/* Outer ambient glow ring (idle + speaking) */}
-        {(state === 'idle' || state === 'speaking') && (
-          <div
-            className="absolute rounded-full animate-pulse-slow"
-            style={{
-              width: 300, height: 300,
-              background: `radial-gradient(circle, ${cfg.glowColor} 0%, transparent 70%)`,
-            }}
-          />
-        )}
+        {/* Soft ambient glow — always present, breathes on idle */}
+        <div
+          className={`absolute rounded-full ${state === 'idle' ? 'animate-breathe' : 'animate-pulse-gentle'}`}
+          style={{
+            width: 340, height: 340,
+            background: `radial-gradient(circle, ${cfg.glowColor} 0%, ${cfg.glowOuter} 50%, transparent 75%)`,
+          }}
+        />
 
-        {/* Ping ring (listening) */}
+        {/* Listening: gentle expanding rings — not alarming, just attentive */}
         {state === 'listening' && (
           <>
             <div className="absolute rounded-full animate-ping"
-              style={{ width: 280, height: 280, background: cfg.pulseColor }} />
+              style={{ width: 270, height: 270, background: 'rgba(56,174,210,0.12)', animationDuration: '2s' }} />
             <div className="absolute rounded-full animate-ping"
-              style={{ width: 240, height: 240, background: cfg.pulseColor, animationDelay: '0.3s' }} />
+              style={{ width: 240, height: 240, background: 'rgba(56,174,210,0.08)', animationDuration: '2s', animationDelay: '0.5s' }} />
           </>
         )}
 
-        {/* Pulse ring (speaking) */}
+        {/* Speaking: gentle sage pulse */}
         {state === 'speaking' && (
-          <div className="absolute rounded-full animate-pulse"
-            style={{ width: 260, height: 260, background: cfg.pulseColor }} />
+          <div className="absolute rounded-full animate-pulse-gentle"
+            style={{ width: 265, height: 265, background: 'rgba(58,138,113,0.15)' }} />
         )}
 
-        {/* The orb itself */}
+        {/* The orb */}
         <div
-          className="relative flex items-center justify-center rounded-full cursor-pointer transition-all duration-500"
+          className="relative flex items-center justify-center rounded-full cursor-pointer transition-all duration-700"
           style={{
             width: 220, height: 220,
-            background: cfg.orbBg,
-            boxShadow: `0 0 40px ${cfg.glowColor}, 0 0 0 3px ${cfg.ringColor}, 0 20px 60px rgba(0,0,0,0.5)`,
+            background: cfg.orbGradient,
+            boxShadow: `0 0 0 2px ${cfg.ringColor}, 0 0 50px ${cfg.glowColor}, 0 24px 64px rgba(0,0,0,0.5)`,
           }}
         >
-          {/* Inner shimmer */}
-          <div className="absolute inset-3 rounded-full opacity-20"
-            style={{ background: 'radial-gradient(circle at 35% 35%, rgba(255,255,255,0.4), transparent)' }} />
+          {/* Specular highlight */}
+          <div className="absolute inset-3 rounded-full opacity-15"
+            style={{ background: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.6), transparent 60%)' }} />
 
           {state === 'processing' ? (
-            <svg className="w-20 h-20 animate-spin" style={{ color: 'rgba(255,255,255,0.9)' }} fill="none" viewBox="0 0 24 24">
+            <svg className="w-20 h-20 animate-spin" style={{ color: 'rgba(114,200,226,0.9)' }} fill="none" viewBox="0 0 24 24">
               <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"/>
               <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
             </svg>
@@ -107,9 +112,15 @@ export function VoiceOrb({ state, onPointerDown, onPointerUp }: Props) {
         </div>
       </div>
 
-      {/* State label */}
+      {/* Label — gentle, never urgent */}
       <p className="mt-10 text-2xl font-light text-center px-6 tracking-wide"
-        style={{ color: state === 'idle' ? 'rgba(212,165,58,0.7)' : 'rgba(255,255,255,0.9)' }}>
+        style={{
+          color: state === 'idle'
+            ? 'rgba(114,200,226,0.6)'
+            : state === 'speaking'
+            ? 'rgba(128,192,170,0.9)'
+            : 'rgba(255,255,255,0.85)',
+        }}>
         {cfg.label}
       </p>
     </div>

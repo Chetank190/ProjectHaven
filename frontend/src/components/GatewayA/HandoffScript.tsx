@@ -18,9 +18,7 @@ export function HandoffScript({ facilityName, facilityPhone, payload, onClose }:
     setLoading(true);
     try {
       const r = await api.post<HandoffResponse>('/handoff-script', {
-        facility_name:  facilityName,
-        facility_phone: facilityPhone,
-        payload,
+        facility_name: facilityName, facility_phone: facilityPhone, payload,
       });
       setScript(r.data.script);
     } catch {
@@ -40,69 +38,59 @@ export function HandoffScript({ facilityName, facilityPhone, payload, onClose }:
 
   return (
     <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
-      style={{ background: 'rgba(61,11,21,0.6)', backdropFilter: 'blur(4px)' }}>
+      style={{ background: 'rgba(10,42,61,0.7)', backdropFilter: 'blur(4px)' }}>
       <div className="rounded-2xl overflow-hidden shadow-2xl max-w-lg w-full"
-        style={{ background: 'white', border: '1px solid #F4B0BB' }}>
+        style={{ background: 'white', border: '1px solid #AADEED' }}>
 
         {/* Modal header */}
         <div className="px-5 py-4 flex items-center justify-between"
-          style={{ background: 'linear-gradient(135deg, #3D0B15, #7D1A2A)' }}>
+          style={{ background: 'linear-gradient(135deg, #0A2A3D, #1A7A9A)' }}>
           <div>
             <div className="text-white font-semibold text-sm">Phone Script</div>
-            <div className="text-xs mt-0.5" style={{ color: '#F4B0BB' }}>{facilityName}</div>
+            <div className="text-xs mt-0.5" style={{ color: '#72C8E2' }}>{facilityName}</div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full flex items-center justify-center transition"
-            style={{ background: 'rgba(255,255,255,0.15)', color: 'white' }}
-          >
+          <button onClick={onClose}
+            className="w-7 h-7 rounded-full flex items-center justify-center"
+            style={{ background: 'rgba(255,255,255,0.15)', color: 'white' }}>
             ✕
           </button>
         </div>
 
         <div className="p-5">
           {!script && !loading && (
-            <button
-              onClick={generate}
-              className="w-full font-semibold py-3 rounded-xl text-sm text-white transition-all"
-              style={{ background: 'linear-gradient(135deg, #7D1A2A, #C23B52)', boxShadow: '0 4px 12px rgba(155,35,53,0.3)' }}
-            >
+            <button onClick={generate}
+              className="w-full font-semibold py-3 rounded-xl text-sm text-white"
+              style={{ background: 'linear-gradient(135deg, #0F4259, #1A7A9A)', boxShadow: '0 4px 12px rgba(15,66,89,0.25)' }}>
               Generate Phone Script
             </button>
           )}
-
           {loading && (
             <div className="text-center py-10">
-              <svg className="w-8 h-8 mx-auto mb-3 animate-spin" style={{ color: '#9B2335' }} fill="none" viewBox="0 0 24 24">
+              <svg className="w-8 h-8 mx-auto mb-3 animate-spin" style={{ color: '#1A7A9A' }} fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
               </svg>
-              <p className="text-sm" style={{ color: '#7A5C54' }}>Generating phone script…</p>
+              <p className="text-sm" style={{ color: '#506170' }}>Generating script…</p>
             </div>
           )}
-
           {script && (
             <>
               <div className="rounded-xl p-4 text-sm leading-relaxed whitespace-pre-wrap font-mono"
-                style={{ background: '#FDF6F3', border: '1px solid #EDD5CC', color: '#2C1518' }}>
+                style={{ background: '#F5F7F8', border: '1px solid #D0D8DE', color: '#1A2330' }}>
                 {script}
               </div>
               <div className="flex gap-3 mt-4">
-                <button
-                  onClick={copy}
+                <button onClick={copy}
                   className="flex-1 font-semibold py-2.5 rounded-xl text-sm text-white transition-all"
                   style={copied
-                    ? { background: '#065F46', boxShadow: 'none' }
-                    : { background: 'linear-gradient(135deg, #B44A1F, #C85D30)', boxShadow: '0 4px 10px rgba(180,74,31,0.3)' }
-                  }
-                >
+                    ? { background: '#2E6E59' }
+                    : { background: 'linear-gradient(135deg, #255748, #3A8A71)', boxShadow: '0 4px 10px rgba(37,87,72,0.25)' }
+                  }>
                   {copied ? '✓ Copied to clipboard' : '📋 Copy Script'}
                 </button>
-                <button
-                  onClick={generate}
-                  className="px-4 py-2.5 rounded-xl text-sm font-semibold transition"
-                  style={{ background: '#FAD9DE', color: '#7D1A2A', border: '1px solid #F4B0BB' }}
-                >
+                <button onClick={generate}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold"
+                  style={{ background: '#D5EFF5', color: '#155F79', border: '1px solid #AADEED' }}>
                   Regenerate
                 </button>
               </div>

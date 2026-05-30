@@ -15,13 +15,12 @@ export function Ticket({ ticketText, clientName }: Props) {
   };
 
   return (
-    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #3D2228' }}>
-      {/* Header bar */}
+    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #2A3540' }}>
       <div className="flex items-center justify-between px-4 py-2.5"
-        style={{ background: 'linear-gradient(135deg, #1A0E10, #3D2228)' }}>
+        style={{ background: 'linear-gradient(135deg, #0F1720, #1A2330)' }}>
         <div className="flex items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#B87333' }} />
-          <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#FAEFD4' }}>
+          <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#38AED2' }} />
+          <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#72C8E2' }}>
             Care Ticket{clientName ? ` · ${clientName}` : ''}
           </span>
         </div>
@@ -29,17 +28,15 @@ export function Ticket({ ticketText, clientName }: Props) {
           onClick={copy}
           className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
           style={copied
-            ? { background: '#065F46', color: '#D1FADF' }
-            : { background: 'rgba(184,115,51,0.25)', color: '#EDC36C', border: '1px solid rgba(184,115,51,0.4)' }
+            ? { background: '#255748', color: '#80C0AA' }
+            : { background: 'rgba(26,147,187,0.2)', color: '#72C8E2', border: '1px solid rgba(56,174,210,0.3)' }
           }
         >
           {copied ? '✓ Copied' : '📋 Copy'}
         </button>
       </div>
-
-      {/* Ticket body */}
-      <div className="px-4 py-3" style={{ background: '#231316' }}>
-        <pre className="whitespace-pre-wrap text-xs leading-relaxed font-mono" style={{ color: '#EDC36C' }}>
+      <div className="px-4 py-3" style={{ background: '#1A2330' }}>
+        <pre className="whitespace-pre-wrap text-xs leading-relaxed font-mono" style={{ color: '#72C8E2' }}>
           {ticketText}
         </pre>
       </div>

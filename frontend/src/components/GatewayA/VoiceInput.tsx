@@ -45,28 +45,23 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
     setCountdown(null);
   };
 
-  const handleSubmit = () => {
-    if (text.trim().length >= 10) onSubmit(text.trim());
-  };
-
+  const handleSubmit = () => { if (text.trim().length >= 10) onSubmit(text.trim()); };
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
   };
 
   return (
-    <div className="rounded-2xl overflow-hidden shadow-lg"
-      style={{ background: 'white', border: '1px solid #EDD5CC' }}>
-
-      {/* Card header bar */}
+    <div className="rounded-2xl overflow-hidden shadow-sm" style={{ background: 'white', border: '1px solid #D0D8DE' }}>
+      {/* Header strip */}
       <div className="px-5 py-3 flex items-center gap-2"
-        style={{ background: 'linear-gradient(90deg, #FAD9DE 0%, #FDF0F2 100%)', borderBottom: '1px solid #F4B0BB' }}>
-        <svg className="w-4 h-4" style={{ color: '#9B2335' }} fill="currentColor" viewBox="0 0 20 20">
+        style={{ background: 'linear-gradient(90deg, #D5EFF5, #EFF9FB)', borderBottom: '1px solid #AADEED' }}>
+        <svg className="w-4 h-4" style={{ color: '#1A7A9A' }} fill="currentColor" viewBox="0 0 20 20">
           <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/>
           <path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd"/>
         </svg>
-        <h2 className="text-sm font-semibold tracking-wide uppercase" style={{ color: '#7D1A2A' }}>
+        <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: '#155F79' }}>
           Client Notes
-        </h2>
+        </span>
       </div>
 
       <div className="p-5">
@@ -78,13 +73,13 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
           rows={5}
           className="w-full rounded-xl px-4 py-3 text-sm resize-none transition-all"
           style={{
-            background: '#FDF6F3',
-            border: `2px solid ${text ? '#C23B52' : '#EDD5CC'}`,
-            color: '#2C1518',
+            background: '#F5F7F8',
+            border: `2px solid ${text ? '#1A7A9A' : '#D0D8DE'}`,
+            color: '#1A2330',
             outline: 'none',
           }}
-          onFocus={e => { e.currentTarget.style.borderColor = '#9B2335'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(194,59,82,0.15)'; }}
-          onBlur={e  => { e.currentTarget.style.borderColor = text ? '#C23B52' : '#EDD5CC'; e.currentTarget.style.boxShadow = 'none'; }}
+          onFocus={e => { e.currentTarget.style.borderColor = '#1A7A9A'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(26,122,154,0.12)'; }}
+          onBlur={e  => { e.currentTarget.style.borderColor = text ? '#1A7A9A' : '#D0D8DE'; e.currentTarget.style.boxShadow = 'none'; }}
         />
 
         <div className="flex items-center gap-3 mt-3">
@@ -94,10 +89,10 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
               onMouseUp={stopListening}
               onTouchStart={startListening}
               onTouchEnd={stopListening}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all flex-shrink-0"
               style={listening
-                ? { background: '#9B2335', color: 'white', boxShadow: '0 0 0 3px rgba(155,35,53,0.3)' }
-                : { background: '#FAD9DE', color: '#7D1A2A', border: '1px solid #F4B0BB' }
+                ? { background: '#1A7A9A', color: 'white', boxShadow: '0 0 0 3px rgba(26,122,154,0.2)' }
+                : { background: '#D5EFF5', color: '#155F79', border: '1px solid #AADEED' }
               }
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -112,8 +107,8 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
             disabled={loading || text.trim().length < 10}
             className="flex-1 flex items-center justify-center gap-2 font-semibold py-2.5 rounded-xl text-sm transition-all"
             style={loading || text.trim().length < 10
-              ? { background: '#EDD5CC', color: '#A67F72', cursor: 'not-allowed' }
-              : { background: 'linear-gradient(135deg, #7D1A2A, #C23B52)', color: 'white', boxShadow: '0 4px 12px rgba(155,35,53,0.35)' }
+              ? { background: '#E9EDF0', color: '#8A9BAA', cursor: 'not-allowed' }
+              : { background: 'linear-gradient(135deg, #0F4259, #1A7A9A)', color: 'white', boxShadow: '0 4px 12px rgba(15,66,89,0.3)' }
             }
           >
             {loading ? (
@@ -124,14 +119,12 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
                 </svg>
                 Routing…
               </>
-            ) : (
-              <>Route Client <span className="text-base">→</span></>
-            )}
+            ) : 'Route Client →'}
           </button>
         </div>
 
         {text.trim().length > 0 && text.trim().length < 10 && (
-          <p className="text-xs mt-2 font-medium" style={{ color: '#B44A1F' }}>
+          <p className="text-xs mt-2 font-medium" style={{ color: '#B45309' }}>
             Please add more detail (min 10 characters).
           </p>
         )}
