@@ -18,22 +18,42 @@ export function BenchmarkPanel() {
   const fmt = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)} ms`);
 
   return (
-    <div className="fixed bottom-4 right-4 bg-gray-900 text-white rounded-xl p-4 shadow-2xl min-w-48 z-50 border border-gray-700">
-      <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        GPU vs CPU
+    <div
+      className="fixed bottom-4 right-4 rounded-xl shadow-2xl z-50 overflow-hidden min-w-44"
+      style={{ background: 'linear-gradient(135deg, #1A0E10, #3D2228)', border: '1px solid rgba(184,115,51,0.3)' }}
+    >
+      {/* Title strip */}
+      <div className="px-3 py-1.5 text-center"
+        style={{ background: 'rgba(184,115,51,0.15)', borderBottom: '1px solid rgba(184,115,51,0.2)' }}>
+        <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#EDC36C' }}>
+          GPU vs CPU
+        </span>
       </div>
-      <div className="flex flex-col gap-1 text-sm font-mono">
-        <div className="flex justify-between gap-4">
-          <span className="text-green-400">GPU</span>
-          <span>{fmt(data?.last_gpu_ms ?? null)}</span>
+
+      <div className="px-3 py-2.5 flex flex-col gap-1.5 font-mono text-xs">
+        <div className="flex justify-between items-center gap-4">
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#C23B52' }} />
+            <span style={{ color: '#F4B0BB' }}>GPU</span>
+          </div>
+          <span className="font-semibold" style={{ color: 'white' }}>{fmt(data?.last_gpu_ms ?? null)}</span>
         </div>
-        <div className="flex justify-between gap-4">
-          <span className="text-blue-400">CPU</span>
-          <span>{fmt(data?.last_cpu_ms ?? null)}</span>
+
+        <div className="flex justify-between items-center gap-4">
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#B44A1F' }} />
+            <span style={{ color: '#FAE3D5' }}>CPU</span>
+          </div>
+          <span className="font-semibold" style={{ color: 'white' }}>{fmt(data?.last_cpu_ms ?? null)}</span>
         </div>
-        <div className="border-t border-gray-700 mt-1 pt-1 flex justify-between gap-4">
-          <span className="text-yellow-400">Speedup</span>
-          <span className="font-bold text-yellow-300">
+
+        <div className="flex justify-between items-center gap-4 pt-1.5"
+          style={{ borderTop: '1px solid rgba(184,115,51,0.2)' }}>
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#B87333' }} />
+            <span style={{ color: '#EDC36C' }}>Speedup</span>
+          </div>
+          <span className="font-black text-sm" style={{ color: data?.speedup ? '#EDC36C' : '#7A5C54' }}>
             {data?.speedup ? `${data.speedup}×` : '—'}
           </span>
         </div>

@@ -16,13 +16,13 @@ import { BenchmarkPanel } from '../shared/BenchmarkPanel';
 type Step = 'idle' | 'compiled' | 'confirmed' | 'routed';
 
 export function CaseworkerPage() {
-  const [step,         setStep]         = useState<Step>('idle');
-  const [loading,      setLoading]      = useState(false);
-  const [error,        setError]        = useState<string | null>(null);
-  const [clientName,   setClientName]   = useState('');
-  const [payload,      setPayload]      = useState<NeedsPayload | null>(null);
-  const [pendingText,  setPendingText]  = useState('');
-  const [routeResult,  setRouteResult]  = useState<CaseworkerRouteResponse | null>(null);
+  const [step,          setStep]          = useState<Step>('idle');
+  const [loading,       setLoading]       = useState(false);
+  const [error,         setError]         = useState<string | null>(null);
+  const [clientName,    setClientName]    = useState('');
+  const [payload,       setPayload]       = useState<NeedsPayload | null>(null);
+  const [pendingText,   setPendingText]   = useState('');
+  const [routeResult,   setRouteResult]   = useState<CaseworkerRouteResponse | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<ItineraryResult | null>(null);
 
   const originLat = 43.6532;
@@ -33,11 +33,10 @@ export function CaseworkerPage() {
     setError(null);
     setPendingText(text);
     try {
-      // Preview the payload before routing
       const r = await api.post<CaseworkerRouteResponse>('/caseworker/route', {
         text,
-        origin_lat: originLat,
-        origin_lon: originLon,
+        origin_lat:  originLat,
+        origin_lon:  originLon,
         client_name: clientName || undefined,
       });
       setPayload(r.data.payload);
@@ -51,22 +50,18 @@ export function CaseworkerPage() {
   };
 
   const handleConfirm = async (confirmed: NeedsPayload) => {
-    // If payload changed, re-route with confirmed payload
     if (JSON.stringify(confirmed) !== JSON.stringify(payload)) {
       setLoading(true);
       try {
         const r = await api.post<CaseworkerRouteResponse>('/caseworker/route', {
-          text: pendingText,
-          origin_lat: originLat,
-          origin_lon: originLon,
+          text:        pendingText,
+          origin_lat:  originLat,
+          origin_lon:  originLon,
           client_name: clientName || undefined,
         });
         setRouteResult(r.data);
-      } catch {
-        // Keep existing route result on re-route failure
-      } finally {
-        setLoading(false);
-      }
+      } catch { /* keep existing result */ }
+      finally { setLoading(false); }
     }
     setStep('routed');
   };
@@ -80,25 +75,50 @@ export function CaseworkerPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen flex flex-col" style={{ background: 'linear-gradient(160deg, #FDF6F3 0%, #F5EAE5 100%)' }}>
+
       {/* Header */}
-      <header className="bg-blue-700 text-white px-6 py-4 shadow">
+      <header style={{ background: 'linear-gradient(135deg, #3D0B15 0%, #7D1A2A 50%, #9B2335 100%)' }}
+        className="text-white px-6 py-4 shadow-xl">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold">Haven Matrix</h1>
-            <p className="text-blue-200 text-sm">Caseworker Gateway</p>
+            <div className="flex items-center gap-2">
+              {/* Logo mark */}
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: 'rgba(184,115,51,0.3)', border: '1px solid rgba(184,115,51,0.5)' }}>
+                <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 2L14 6v4l-6 4L2 10V6z" fill="#B87333" opacity="0.9"/>
+                  <path d="M8 2L14 6l-6 4L2 6z" fill="#D4A53A" opacity="0.6"/>
+                </svg>
+              </div>
+              <h1 className="text-xl font-bold tracking-tight">Haven Matrix</h1>
+            </div>
+            <p className="text-xs mt-0.5 font-medium tracking-wider uppercase"
+              style={{ color: 'rgba(212,165,58,0.8)' }}>
+              Caseworker Gateway
+            </p>
           </div>
+
           <div className="flex items-center gap-3">
             <input
               type="text"
               value={clientName}
               onChange={e => setClientName(e.target.value)}
               placeholder="Client name (optional)"
-              className="text-sm px-3 py-1.5 rounded-lg bg-white/20 text-white placeholder-blue-200 border border-blue-500 focus:outline-none focus:ring-2 focus:ring-white"
+              className="text-sm px-3 py-2 rounded-lg font-medium transition"
+              style={{
+                background: 'rgba(255,255,255,0.12)',
+                border: '1px solid rgba(212,165,58,0.4)',
+                color: 'white',
+              }}
             />
             {step !== 'idle' && (
-              <button onClick={reset} className="text-sm bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded-lg transition">
-                New Client
+              <button
+                onClick={reset}
+                className="text-sm font-semibold px-4 py-2 rounded-lg transition"
+                style={{ background: 'rgba(184,115,51,0.25)', border: '1px solid rgba(184,115,51,0.5)', color: '#F5DCA4' }}
+              >
+                + New Client
               </button>
             )}
           </div>
@@ -106,12 +126,12 @@ export function CaseworkerPage() {
       </header>
 
       <main className="flex-1 max-w-3xl mx-auto w-full px-4 py-6 space-y-4">
-        {/* Shift briefing always visible */}
         <ShiftBriefing />
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
-            {error}
+          <div className="rounded-xl p-4 text-sm font-medium"
+            style={{ background: '#FAD9DE', border: '1px solid #F4B0BB', color: '#5E1220' }}>
+            ⚠ {error}
           </div>
         )}
 
@@ -125,13 +145,21 @@ export function CaseworkerPage() {
 
         {step === 'routed' && routeResult && (
           <>
-            {/* Latency info strip */}
-            <div className="text-xs text-gray-400 flex gap-4">
-              <span>Method: <strong>{routeResult.compile_method.toUpperCase()}</strong></span>
-              <span>NIM: {routeResult.nim_latency_ms.toFixed(0)} ms</span>
-              <span>GPU solve: {routeResult.gpu_solve_ms.toFixed(1)} ms</span>
-              <span>CPU solve: {routeResult.cpu_solve_ms.toFixed(1)} ms</span>
-              {routeResult.speedup && <span className="text-green-600 font-bold">Speedup: {routeResult.speedup}×</span>}
+            {/* Latency strip */}
+            <div className="flex flex-wrap gap-3 text-xs font-mono px-1">
+              <span className="px-2 py-1 rounded-md font-semibold"
+                style={{ background: '#FAD9DE', color: '#7D1A2A' }}>
+                {routeResult.compile_method.toUpperCase()}
+              </span>
+              <span style={{ color: '#7A5C54' }}>NIM {routeResult.nim_latency_ms.toFixed(0)} ms</span>
+              <span style={{ color: '#7A5C54' }}>GPU {routeResult.gpu_solve_ms.toFixed(1)} ms</span>
+              <span style={{ color: '#7A5C54' }}>CPU {routeResult.cpu_solve_ms.toFixed(1)} ms</span>
+              {routeResult.speedup && (
+                <span className="font-bold px-2 py-1 rounded-md"
+                  style={{ background: '#FAEFD4', color: '#7A491E' }}>
+                  {routeResult.speedup}× speedup
+                </span>
+              )}
             </div>
 
             <ItineraryView
@@ -144,7 +172,6 @@ export function CaseworkerPage() {
         )}
       </main>
 
-      {/* Handoff script modal */}
       {handoffTarget && payload && (
         <HandoffScript
           facilityName={handoffTarget.name}

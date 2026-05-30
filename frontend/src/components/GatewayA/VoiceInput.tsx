@@ -1,28 +1,26 @@
-// Phase 4: text input placeholder. Voice integration added in Phase 5.
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 
 interface Props {
-  onSubmit:    (text: string) => void;
-  loading:     boolean;
+  onSubmit:     (text: string) => void;
+  loading:      boolean;
   placeholder?: string;
 }
 
 export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak client notes here…' }: Props) {
-  const [text,       setText]       = useState('');
-  const [listening,  setListening]  = useState(false);
-  const [countdown,  setCountdown]  = useState<number | null>(null);
+  const [text,      setText]      = useState('');
+  const [listening, setListening] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const SpeechRecognitionAPI =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
+  const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   const startListening = () => {
     if (!SpeechRecognitionAPI) return;
     const sr = new SpeechRecognitionAPI();
-    sr.continuous       = false;
-    sr.interimResults   = true;
-    sr.lang             = 'en-CA';
+    sr.continuous     = false;
+    sr.interimResults = true;
+    sr.lang           = 'en-CA';
     sr.onresult = (e: SpeechRecognitionEvent) => {
       const t = Array.from(e.results).map((r: SpeechRecognitionResult) => r[0].transcript).join('');
       setText(t);
@@ -56,47 +54,88 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-lg p-6 max-w-2xl w-full">
-      <h2 className="text-lg font-semibold text-gray-800 mb-3">Client Notes</h2>
+    <div className="rounded-2xl overflow-hidden shadow-lg"
+      style={{ background: 'white', border: '1px solid #EDD5CC' }}>
 
-      <textarea
-        value={text}
-        onChange={e => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        rows={5}
-        className="w-full border border-gray-300 rounded-xl px-4 py-3 text-gray-800 resize-none focus:outline-none focus:ring-2 focus:ring-blue-400"
-      />
-
-      <div className="flex items-center gap-3 mt-3">
-        {SpeechRecognitionAPI && (
-          <button
-            onMouseDown={startListening}
-            onMouseUp={stopListening}
-            onTouchStart={startListening}
-            onTouchEnd={stopListening}
-            className={`px-4 py-2 rounded-xl font-medium transition ${
-              listening
-                ? 'bg-red-500 text-white animate-pulse'
-                : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-            }`}
-          >
-            {listening ? `🎤 Listening… ${countdown}s` : '🎤 Hold to speak'}
-          </button>
-        )}
-
-        <button
-          onClick={handleSubmit}
-          disabled={loading || text.trim().length < 10}
-          className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold py-2 rounded-xl transition"
-        >
-          {loading ? 'Routing…' : 'Route Client →'}
-        </button>
+      {/* Card header bar */}
+      <div className="px-5 py-3 flex items-center gap-2"
+        style={{ background: 'linear-gradient(90deg, #FAD9DE 0%, #FDF0F2 100%)', borderBottom: '1px solid #F4B0BB' }}>
+        <svg className="w-4 h-4" style={{ color: '#9B2335' }} fill="currentColor" viewBox="0 0 20 20">
+          <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/>
+          <path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd"/>
+        </svg>
+        <h2 className="text-sm font-semibold tracking-wide uppercase" style={{ color: '#7D1A2A' }}>
+          Client Notes
+        </h2>
       </div>
 
-      {text.trim().length > 0 && text.trim().length < 10 && (
-        <p className="text-xs text-amber-600 mt-2">Please add more detail (min 10 characters).</p>
-      )}
+      <div className="p-5">
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          rows={5}
+          className="w-full rounded-xl px-4 py-3 text-sm resize-none transition-all"
+          style={{
+            background: '#FDF6F3',
+            border: `2px solid ${text ? '#C23B52' : '#EDD5CC'}`,
+            color: '#2C1518',
+            outline: 'none',
+          }}
+          onFocus={e => { e.currentTarget.style.borderColor = '#9B2335'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(194,59,82,0.15)'; }}
+          onBlur={e  => { e.currentTarget.style.borderColor = text ? '#C23B52' : '#EDD5CC'; e.currentTarget.style.boxShadow = 'none'; }}
+        />
+
+        <div className="flex items-center gap-3 mt-3">
+          {SpeechRecognitionAPI && (
+            <button
+              onMouseDown={startListening}
+              onMouseUp={stopListening}
+              onTouchStart={startListening}
+              onTouchEnd={stopListening}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all"
+              style={listening
+                ? { background: '#9B2335', color: 'white', boxShadow: '0 0 0 3px rgba(155,35,53,0.3)' }
+                : { background: '#FAD9DE', color: '#7D1A2A', border: '1px solid #F4B0BB' }
+              }
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.42 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+              </svg>
+              {listening ? `Listening… ${countdown}s` : 'Hold to speak'}
+            </button>
+          )}
+
+          <button
+            onClick={handleSubmit}
+            disabled={loading || text.trim().length < 10}
+            className="flex-1 flex items-center justify-center gap-2 font-semibold py-2.5 rounded-xl text-sm transition-all"
+            style={loading || text.trim().length < 10
+              ? { background: '#EDD5CC', color: '#A67F72', cursor: 'not-allowed' }
+              : { background: 'linear-gradient(135deg, #7D1A2A, #C23B52)', color: 'white', boxShadow: '0 4px 12px rgba(155,35,53,0.35)' }
+            }
+          >
+            {loading ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                </svg>
+                Routing…
+              </>
+            ) : (
+              <>Route Client <span className="text-base">→</span></>
+            )}
+          </button>
+        </div>
+
+        {text.trim().length > 0 && text.trim().length < 10 && (
+          <p className="text-xs mt-2 font-medium" style={{ color: '#B44A1F' }}>
+            Please add more detail (min 10 characters).
+          </p>
+        )}
+      </div>
     </div>
   );
 }
