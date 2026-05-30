@@ -23,12 +23,16 @@ export function KioskPage() {
   const [routeResult, setRouteResult] = useState<KioskRouteResponse | null>(null);
   const [error,       setError]       = useState<string | null>(null);
 
-  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hubCoords    = KIOSK_HUBS[hubName] ?? KIOSK_HUBS[KIOSK_DEFAULT_HUB];
+  const idleTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const kioskStateRef  = useRef<KioskState>('idle');
+  const hubCoords      = KIOSK_HUBS[hubName] ?? KIOSK_HUBS[KIOSK_DEFAULT_HUB];
+
+  useEffect(() => { kioskStateRef.current = kioskState; }, [kioskState]);
 
   const resetIdle = () => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
+      if (['eligibility', 'routing', 'processing'].includes(kioskStateRef.current)) return;
       window.speechSynthesis.cancel();
       setKioskState('idle');
       setSessionId(null);

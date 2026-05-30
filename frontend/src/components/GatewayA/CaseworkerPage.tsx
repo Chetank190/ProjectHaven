@@ -60,8 +60,14 @@ export function CaseworkerPage() {
           client_name: clientName || undefined,
         });
         setRouteResult(r.data);
-      } catch { /* keep existing */ }
-      finally { setLoading(false); }
+        setStep('routed');
+      } catch {
+        setError('Re-route failed. Showing previous results.');
+        setStep('routed');
+      } finally {
+        setLoading(false);
+      }
+      return;
     }
     setStep('routed');
   };

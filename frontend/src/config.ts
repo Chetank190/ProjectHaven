@@ -3,7 +3,8 @@
 export const VOICE_HOLD_MAX_MS      = 45_000;
 export const VOICE_SILENCE_KILL_MS  = 10_000;
 export const VOICE_SESSION_IDLE_MS  = 120_000;
-export const VOICE_MIN_CHARS        = 10;
+export const VOICE_MIN_CHARS              = 10;
+export const VOICE_ELIGIBILITY_WAIT_SEC   = 30;
 
 export const API_BASE = '/api/v1';
 

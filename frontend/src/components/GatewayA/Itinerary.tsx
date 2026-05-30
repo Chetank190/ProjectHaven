@@ -122,7 +122,7 @@ export function ItineraryView({ itinerary, onHandoff }: Props) {
         <div key={pillar}>
           {results.map((r, i) => (
             <ResultCard
-              key={i}
+              key={`${pillar}-${r.name}-${i}`}
               result={r}
               onHandoff={i === 0 && onHandoff ? () => onHandoff(r) : undefined}
             />

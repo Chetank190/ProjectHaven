@@ -141,7 +141,8 @@ def _score_and_rank(df, indices, distances_km, stops_df, pillar_name: str) -> li
 
     for idx, dist_km in zip(idx_list, dist_list):
         row = pdf.iloc[int(idx)]
-        occ     = float(row.get("occupancy_ratio", 0.5) or 0.5)
+        occ_raw = row.get("occupancy_ratio")
+        occ     = float(occ_raw) if occ_raw is not None else 0.5
         transit = _check_transit(float(row["lat"]), float(row["lon"]), stops_pdf)
         score   = (
             WEIGHT_DISTANCE  * (dist_km / max_dist) +

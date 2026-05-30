@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface Props {
   onSubmit:     (text: string) => void;
@@ -14,6 +14,13 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
   const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      recognitionRef.current?.stop();
+    };
+  }, []);
 
   const startListening = () => {
     if (!SpeechRecognitionAPI) return;

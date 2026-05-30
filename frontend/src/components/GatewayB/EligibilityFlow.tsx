@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSpeech } from '../shared/useSpeech';
 import { VoiceOrb }  from './VoiceOrb';
-import { VOICE_ELIGIBILITY_WAIT_SEC } from './eligibilityConfig';
+import { VOICE_ELIGIBILITY_WAIT_SEC } from '../../config';
 
 interface Props {
   questions:  string[];

@@ -131,13 +131,18 @@ def _load_osm(pd_engine):
 
     rows = []
     for el in raw.get("elements", []):
+        try:
+            lat = float(el.get("lat", 0.0))
+            lon = float(el.get("lon", 0.0))
+        except (ValueError, TypeError):
+            continue
         tags = el.get("tags", {})
         rows.append({
             "osm_id":  el.get("id"),
             "name":    tags.get("name", "Public facility"),
             "amenity": tags.get("amenity") or tags.get("social_facility", "facility"),
-            "lat":     float(el.get("lat", 0.0)),
-            "lon":     float(el.get("lon", 0.0)),
+            "lat":     lat,
+            "lon":     lon,
         })
 
     df = pd.DataFrame(rows)

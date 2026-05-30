@@ -159,9 +159,13 @@ async def caseworker_route(req: CaseworkerRouteRequest):
 
     # CPU benchmark in executor to avoid blocking the event loop
     loop = asyncio.get_event_loop()
-    itinerary_cpu, cpu_ms = await loop.run_in_executor(
-        None, solve, payload, datasets_cpu, origin, EngineMode.CPU
-    )
+    try:
+        itinerary_cpu, cpu_ms = await loop.run_in_executor(
+            None, solve, payload, datasets_cpu, origin, EngineMode.CPU
+        )
+    except Exception as e:
+        print(f"[WARN] CPU benchmark failed: {e}")
+        cpu_ms = None
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
 
     return {
@@ -169,8 +173,8 @@ async def caseworker_route(req: CaseworkerRouteRequest):
         "compile_method":        method,
         "nim_latency_ms":        round(nim_ms, 1),
         "gpu_solve_ms":          round(gpu_ms, 2),
-        "cpu_solve_ms":          round(cpu_ms, 2),
-        "speedup":               round(cpu_ms / gpu_ms, 1) if gpu_ms > 0 else None,
+        "cpu_solve_ms":          round(cpu_ms, 2) if cpu_ms is not None else None,
+        "speedup":               round(cpu_ms / gpu_ms, 1) if (cpu_ms is not None and gpu_ms and gpu_ms > 0) else None,
         "itinerary":             itinerary_gpu,
         "ticket_text":           build_tts_itinerary_script(itinerary_gpu, req.client_name),
         "eligibility_questions": [],
@@ -210,9 +214,13 @@ async def kiosk_route(req: KioskRouteRequest):
     itinerary, gpu_ms = solve(payload, datasets_gpu, session.origin, gpu_mode)
 
     loop = asyncio.get_event_loop()
-    _, cpu_ms = await loop.run_in_executor(
-        None, solve, payload, datasets_cpu, session.origin, EngineMode.CPU
-    )
+    try:
+        _, cpu_ms = await loop.run_in_executor(
+            None, solve, payload, datasets_cpu, session.origin, EngineMode.CPU
+        )
+    except Exception as e:
+        print(f"[WARN] CPU benchmark failed: {e}")
+        cpu_ms = None
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
 
     return {
