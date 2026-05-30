@@ -14,22 +14,26 @@ This document combines our **Technical Implementation Plan** with a detailed **P
 *   **FR-1: Multi-Location Dual Presentation Gateways**
     *   The app must expose two distinct UI portals: Gateway A (Caseworker) and Gateway B (Kiosk).
     *   Gateway B must support selecting a starting kiosk location from at least 3 pre-configured Toronto hubs or custom input coordinates.
-*   **FR-2: Local NIM Semantic Extraction (NLP)**
-    *   The system must parse raw English clinical notes and return a structured JSON output of client needs and demographics (e.g., `sector: Youth`, `rehab: true`).
-*   **FR-3: Zero-Copy Data Ingestion**
+*   **FR-2: Voice-to-Voice Interface (NEW)**
+    *   **Speech-to-Text (STT):** The app must support audio input via a microphone. It must capture spoken user queries (e.g., *"I need a place to sleep and some warm food"*) and transcribe them into text.
+    *   **Text-to-Speech (TTS):** The app must read the resulting care routing itinerary and directions back to the user aloud.
+    *   *Implementation Strategy:* To maintain zero-latency and offline resilience, we will embed browser-native HTML5/JS Web Speech APIs (`SpeechRecognition` and `speechSynthesis`) directly inside Streamlit. This avoids bulky server-side models or cloud API delays.
+*   **FR-3: Local NIM Semantic Extraction (NLP)**
+    *   The system must parse raw English text (either entered manually or transcribed from voice) and return a structured JSON output of client needs and demographics (e.g., `sector: Youth`, `rehab: true`).
+*   **FR-4: Zero-Copy Data Ingestion**
     *   Datasets must be loaded directly into GPU unified memory blocks using RAPIDS `cuDF` to avoid CPU serialization bottlenecks during routing cycles.
-*   **FR-4: Capacity & Congestion Balanced Routing**
+*   **FR-5: Capacity & Congestion Balanced Routing**
     *   The routing algorithm must calculate a scoring weight combining absolute distance and current shelter/rehab occupancy ratios.
-*   **FR-5: Real-time Performance Benchmarker**
+*   **FR-6: Real-time Performance Benchmarker**
     *   The dashboard must run duplicate CPU (Pandas/Scikit-learn) and GPU (cuDF/cuML) calculation pipelines to report latency (ms) and throughput speedup.
-*   **FR-6: Outbound Delivery (SMS/Ticket)**
+*   **FR-7: Outbound Delivery (SMS/Ticket)**
     *   The app must format route steps into a copyable, low-character text payload that can be sent via SMS or printed as a ticket.
-*   **FR-7: Offline Resiliency Fallback**
+*   **FR-8: Offline Resiliency Fallback**
     *   If Triton NIM/GPU services are offline, the system must toggle to a keyword-matching regex compiler and a CPU pandas parser without crashing.
 
 ### Non-Functional Requirements (NFRs)
 *   **NFR-1: Ultra-low Latency:** Spatial calculations and array masking on the GPU must execute in `< 10ms` to demonstrate DGX Spark hardware superiority.
-*   **NFR-2: Offline Dependency:** Zero network calls to remote AI APIs (like OpenAI) or remote database queries. All data matrices and language processing must run locally.
+*   **NFR-2: Offline Dependency:** Zero network calls to remote AI APIs (like OpenAI) or remote database queries. All data matrices, voice synthesis, and language processing must run locally.
 *   **NFR-3: UI Accessibility:** The Kiosk UI must feature a dark-theme, high-contrast, large-font design suitable for outdoor touch displays.
 
 ---
@@ -57,6 +61,7 @@ graph TD
     subgraph Presentation Layer (Streamlit UI)
         A[Gateway A: Caseworker UI] -->|Caseworker Notes| C[Ingestion Engine]
         B[Gateway B: Kiosk UI] -->|Dropdown / Custom Coord| C
+        V[Voice Interface Widget] -->|STT Transcribe| C
         M[Benchmark Panel] -->|Toggle CPU/GPU| C
     end
 
@@ -76,6 +81,7 @@ graph TD
 
     K -->|Render Map & Route Info| A
     K -->|Render Map & Route Info| B
+    K -->|TTS Audio Output| V
     K -->|SMS / Ticket Generation| L[Outbound Ticket Panel]
 ```
 
@@ -99,7 +105,7 @@ ProjectHaven/
 │   ├── data_ingestion.py      # Zero-Copy RAPIDS Ingestion (cuDF vs. Pandas)
 │   ├── nim_compiler.py        # NVIDIA NIM Llama-3 client (with local mock fallback)
 │   ├── solver.py              # cuML KNN Solver & Congestion Capacity Balancer
-│   └── app.py                 # Streamlit UI + CPU vs GPU Benchmarker
+│   └── app.py                 # Streamlit UI + CPU vs GPU Benchmarker + Web Speech HTML Component
 ├── requirements.txt           # Python packages needed
 └── README.md                  # Run guide, architecture, and Spark pitch story
 ```
@@ -110,33 +116,35 @@ ProjectHaven/
 
 ### A. Data Ingestion & Config
 *   **[config.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/config.py):** Coordinates for kiosk hubs, target data paths, default weights, and local fallback paths.
-*   **[data_ingestion.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/data_ingestion.py):** Loads CSVs from `data/` into RAM. Under `EngineMode.GPU`, uses `cudf.read_csv()` to bypass CPU memory bounds and leverage the unified memory architecture. Under `EngineMode.CPU`, uses `pandas.read_csv()`.
+*   **[data_ingestion.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/data_ingestion.py):** Ingests cached CSVs. Under `EngineMode.GPU`, uses `cudf.read_csv()` to bypass CPU boundaries. Under `EngineMode.CPU`, uses `pandas.read_csv()`.
 
 ### B. NLP NIM Compiler
-*   **[nim_compiler.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/nim_compiler.py):** Queries local NVIDIA NIM Llama-3 model endpoint. Formats raw caseworker strings into strict JSON outputs mapping matching tags: `shelter`, `rehab`, `food`, `supplies`, `hygiene`.
-*   Includes local fallback dictionary parser for standalone offline verification.
+*   **[nim_compiler.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/nim_compiler.py):** Interfaces structured JSON classifications using a local Llama-3 model hosted via Triton/NIM.
 
 ### C. Spatial Solver & Balancer
 *   **[solver.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/solver.py):**
-    *   **Vector Search RAG:** Evaluates unstructured description queries on `rehab_services.csv` descriptions using a local word embedding model and `cuML` KNN search.
-    *   **Parallel Slicing:** Indexes the cuDF matrices in parallel using the boolean dictionary output of the NIM compiler.
-    *   **Transit Proximity Joining:** Using cuDF spatial boundaries to find the nearest TTC transit stop (from `stops.txt`) to the target facilities.
-    *   **Distance Balancer:** Runs `cuML` KNN to compute Haversine distances to nearest open coordinates. Re-weights using congestion percentages and transit proximity.
-    *   **CPU vs GPU Profiler:** Records execution benchmarks in microseconds for both pandas/scikit-learn and cuDF/cuML pipelines.
+    *   **Vector Search RAG:** Performs similarity queries on `rehab_services.csv` service descriptions using `cuML` KNN.
+    *   **Distance Balancer:** Runs `cuML` KNN to compute Haversine distances to nearest locations, balanced against capacity ratios and transit GTFS station proximity.
+    *   **CPU vs GPU Profiler:** Records comparative benchmarks in microseconds.
 
-### D. User Interface
-*   **[app.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/app.py):** Renders the multi-page Streamlit portal. Displays maps, route directories, SMS ticket strings, and CPU vs GPU benchmark charts.
+### D. User Interface & Voice Processing
+*   **[app.py](file:///c:/Users/joysh/Downloads/Haven/ProjectHaven/src/app.py):**
+    *   Renders dual Streamlit panels.
+    *   **Web Speech Integration:** Features an embedded HTML/JS iframe hosting:
+        *   `webkitSpeechRecognition` to stream microphone audio directly into text transcribers.
+        *   `speechSynthesis` (Web Speech API) to speak the final routing instructions aloud.
+    *   Displays routing maps, printable ticket panels, and CPU vs. GPU benchmark dashboards.
 
 ---
 
 ## 6. Verification Plan
 
 ### Automated Verification
-*   **Ingestion Verifier:** Runs basic checks on row counts, schema matching, and CPU/GPU loading options:
+*   **Ingestion Verifier:** Checks file validity:
     ```powershell
     python src/data_ingestion.py --verify
     ```
-*   **Solver Benchmark:** Validates mathematical correctness and checks performance timings:
+*   **Solver Benchmark:** Profiles spatial calculations:
     ```powershell
     python src/solver.py --benchmark
     ```
@@ -146,6 +154,6 @@ ProjectHaven/
     ```powershell
     streamlit run src/app.py
     ```
-2.  Select the **North York Kiosk** and choose the "Hygiene" button. Verify immediate output pointing to the nearest shower facility.
-3.  Navigate to **Caseworker Mode**, enter the caseworker log, and click "Submit". Verify that the output lists steps in a logical sequence and displays an interactive map of the route.
-4.  Toggle **CPU vs. GPU Benchmarking** and confirm that the execution speed graph displays the GPU acceleration advantages.
+2.  Enable the **Voice Assistant** switch. Click "Start Recording" and speak: *"I need shelter and hot food."*
+3.  Confirm that the transcribed text fills Gateway A or Gateway B automatically.
+4.  Confirm that the itinerary outputs are computed, mapped, and read aloud by the speaker system.
