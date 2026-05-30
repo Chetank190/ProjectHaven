@@ -103,16 +103,10 @@ export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
   return (
     <VoiceOrb
       state={orbState}
-      onPointerDown={() => {
+      onClick={() => {
+        // Tap while waiting submits the current transcript early
         if (flowState === 'waiting_for_answer') {
-          clearTranscript();
-          startListening(false);
-        }
-      }}
-      onPointerUp={() => {
-        if (flowState === 'waiting_for_answer') {
-          stopListening();
-          // transcript will update via useEffect
+          advanceOrComplete(idx, transcript);
         }
       }}
     />

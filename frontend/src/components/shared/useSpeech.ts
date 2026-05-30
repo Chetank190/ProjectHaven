@@ -12,7 +12,8 @@ export interface SpeechControls {
   startListening:   (continuous?: boolean) => void;
   stopListening:    () => void;
   startRecording:   () => void;
-  stopRecording:    () => Blob | null;
+  stopRecording:    () => Promise<Blob | null>;
+  transcribeAudio:  (blob: Blob) => Promise<string | null>;
   speak:            (text: string, onEnd?: () => void) => void;
   stopSpeaking:     () => void;
   clearTranscript:  () => void;
@@ -89,8 +90,8 @@ export function useSpeech(): SpeechState & SpeechControls {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
       audioChunks.current = [];
-      mr.ondataavailable = e => audioChunks.current.push(e.data);
-      mr.start();
+      mr.ondataavailable = e => { if (e.data.size > 0) audioChunks.current.push(e.data); };
+      mr.start(250);  // collect a chunk every 250ms so final blob is complete
       mediaRecRef.current = mr;
       setRecording(true);
     } catch (e) {
@@ -98,14 +99,32 @@ export function useSpeech(): SpeechState & SpeechControls {
     }
   }, []);
 
-  const stopRecording = useCallback((): Blob | null => {
+  const stopRecording = useCallback((): Promise<Blob | null> => {
     const mr = mediaRecRef.current;
-    if (!mr) return null;
-    mr.stop();
-    mr.stream.getTracks().forEach(t => t.stop());
+    if (!mr) return Promise.resolve(null);
     mediaRecRef.current = null;
     setRecording(false);
-    return new Blob(audioChunks.current, { type: 'audio/webm' });
+    // Wait for onstop — fires after the final ondataavailable, so all chunks are captured
+    return new Promise(resolve => {
+      mr.onstop = () => {
+        mr.stream.getTracks().forEach(t => t.stop());
+        resolve(new Blob(audioChunks.current, { type: mr.mimeType || 'audio/webm' }));
+      };
+      mr.stop();
+    });
+  }, []);
+
+  const transcribeAudio = useCallback(async (blob: Blob): Promise<string | null> => {
+    try {
+      const form = new FormData();
+      form.append('audio', blob, 'recording.webm');
+      const resp = await fetch('/api/v1/transcribe', { method: 'POST', body: form });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      return (data.transcript as string) || null;
+    } catch {
+      return null;
+    }
   }, []);
 
   const speak = useCallback((text: string, onEnd?: () => void) => {
@@ -113,6 +132,12 @@ export function useSpeech(): SpeechState & SpeechControls {
     const utt = new SpeechSynthesisUtterance(text);
     utt.lang  = 'en-CA';
     utt.rate  = 0.9;
+    utt.pitch = 0.85;  // calmer, less robotic than default 1.0
+    // Prefer a soft, natural voice — falls back to system default if none found
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = ['Google UK English Female', 'Samantha', 'Karen', 'Moira', 'Google US English'];
+    const voice = preferred.map(n => voices.find(v => v.name === n)).find(Boolean);
+    if (voice) utt.voice = voice;
     utt.onstart = () => setSpeaking(true);
     utt.onend   = () => { setSpeaking(false); onEnd?.(); };
     utt.onerror = () => { setSpeaking(false); onEnd?.(); };
@@ -128,7 +153,7 @@ export function useSpeech(): SpeechState & SpeechControls {
 
   return {
     isListening, isRecording, isSpeaking, transcript,
-    startListening, stopListening, startRecording, stopRecording,
+    startListening, stopListening, startRecording, stopRecording, transcribeAudio,
     speak, stopSpeaking, clearTranscript,
   };
 }

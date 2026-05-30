@@ -17,18 +17,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from config import EngineMode, KIOSK_HUBS, LOG_DIR, NIM_ENDPOINT, TELEMETRY_CSV
+from config import (
+    EngineMode, FORCE_CPU_SOLVER, KIOSK_HUBS, LOG_DIR, NIM_ENDPOINT, TELEMETRY_CSV,
+    ASR_NIM_URL, ASR_CLOUD_URL, ASR_NIM_TIMEOUT,
+)
 from data_ingestion import load_all, fetch_weather_alert, get_weather_alert, refresh_shelters
+from pii_scrubber import has_injection
 from nim_compiler import (
     NeedsPayload,
     compile_needs,
-    generate_briefing,
-    generate_handoff_script,
+    compile_needs_async,
+    generate_briefing_async,
+    generate_handoff_script_async,
     kiosk_voice_payload,
 )
 from solver import solve
@@ -111,14 +116,19 @@ async def lifespan(app: FastAPI):
 
     _setup_logging()
 
-    try:
-        datasets_gpu, _ = load_all(EngineMode.GPU)
-        _rapids_mode = "gpu"
-        logger.info("[RAPIDS] GPU datasets loaded into unified memory.")
-    except Exception as e:
-        logger.warning(f"GPU load failed ({e}). Running both paths on CPU.")
+    if FORCE_CPU_SOLVER:
+        logger.info("[RAPIDS] FORCE_CPU_SOLVER=1 — routing on CPU; GPU reserved for LLM.")
         datasets_gpu, _ = load_all(EngineMode.CPU)
         _rapids_mode = "cpu"
+    else:
+        try:
+            datasets_gpu, _ = load_all(EngineMode.GPU)
+            _rapids_mode = "gpu"
+            logger.info("[RAPIDS] GPU datasets loaded into unified memory.")
+        except Exception as e:
+            logger.warning(f"GPU load failed ({e}). Running both paths on CPU.")
+            datasets_gpu, _ = load_all(EngineMode.CPU)
+            _rapids_mode = "cpu"
 
     datasets_cpu, _ = load_all(EngineMode.CPU)
 
@@ -141,11 +151,13 @@ async def lifespan(app: FastAPI):
         """Refresh shelters every 4 hours + weather every 30 min."""
         while True:
             await asyncio.sleep(30 * 60)  # 30 min
-            fetch_weather_alert()
-            await asyncio.sleep(0)
-            # Shelter re-hydration every 4h
-            refresh_shelters(datasets_gpu, EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU)
-            refresh_shelters(datasets_cpu, EngineMode.CPU)
+            await asyncio.to_thread(fetch_weather_alert)
+            # Shelter re-hydration every 4h — run both engines concurrently
+            gpu_engine = EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU
+            await asyncio.gather(
+                asyncio.to_thread(refresh_shelters, datasets_gpu, gpu_engine),
+                asyncio.to_thread(refresh_shelters, datasets_cpu, EngineMode.CPU),
+            )
 
     gc_task  = asyncio.create_task(_session_gc())
     hyd_task = asyncio.create_task(_hydration_loop())
@@ -190,14 +202,14 @@ app.add_middleware(_ReqLogMiddleware)
 
 # ── Request models ────────────────────────────────────────────────────────────
 class CaseworkerRouteRequest(BaseModel):
-    text:        str
-    origin_lat:  float = Field(43.6532, ge=-90, le=90)
-    origin_lon:  float = Field(-79.3832, ge=-180, le=180)
-    client_name: str | None = None
+    text:        str        = Field(..., max_length=5000)
+    origin_lat:  float      = Field(43.6532, ge=-90, le=90)
+    origin_lon:  float      = Field(-79.3832, ge=-180, le=180)
+    client_name: str | None = Field(None, max_length=100)
 
 
 class KioskSessionRequest(BaseModel):
-    transcript: str
+    transcript: str   = Field(..., max_length=2000)
     origin_lat: float = Field(..., ge=-90, le=90)
     origin_lon: float = Field(..., ge=-180, le=180)
 
@@ -215,6 +227,42 @@ class HandoffRequest(BaseModel):
     facility_name:  str
     facility_phone: str
     payload:        NeedsPayload
+
+
+def _briefing_stats(shelters_df, current_time_iso: str) -> tuple:
+    """CPU-bound pandas aggregation extracted so it can run in a thread."""
+    pdf = shelters_df.to_pandas() if hasattr(shelters_df, "to_pandas") else shelters_df
+    total     = int(pdf["CAPACITY_ACTUAL_BED"].sum())
+    available = int(pdf["UNOCCUPIED_BEDS"].sum())
+    by_sector = (
+        pdf.groupby("SECTOR")["UNOCCUPIED_BEDS"]
+        .sum()
+        .astype(int)
+        .to_dict()
+    )
+    summary = (
+        f"Total beds: {total}. Available: {available}. "
+        f"By sector: {by_sector}. Current time: {current_time_iso}."
+    )
+    return total, available, summary
+
+
+# ── ASR helper ────────────────────────────────────────────────────────────────
+def _call_asr(base_url: str, audio_data: bytes, content_type: str) -> str:
+    """Forward raw audio to an NVIDIA ASR NIM and return the transcript string."""
+    import requests as _req
+    ngc_key = os.environ.get("NGC_API_KEY", "not-needed")
+    resp = _req.post(
+        f"{base_url}/v1/audio/transcriptions",
+        files={"file": ("recording", audio_data, content_type or "audio/webm")},
+        data={"language": "en"},
+        headers={"Authorization": f"Bearer {ngc_key}"},
+        timeout=ASR_NIM_TIMEOUT,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    # Parakeet NIM returns {"text": "..."}, OpenAI-compat also uses "text"
+    return data.get("text") or data.get("transcript") or ""
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -302,6 +350,39 @@ async def telemetry_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/v1/transcribe")
+async def transcribe_audio(audio: UploadFile = File(...), request: Request = None):
+    """
+    Receive an audio blob from the kiosk, forward to ASR NIM, return transcript.
+    3-tier: local Parakeet NIM → NVIDIA cloud ASR → 503 (browser falls back to Web Speech).
+    Audio stays on-device when local NIM is running; cloud tier used only as last resort.
+    """
+    rid = getattr(request.state, "rid", "?") if request else "?"
+    audio_data    = await audio.read()
+    content_type  = audio.content_type or "audio/webm"
+    logger.info(f"[{rid}] ASR request size={len(audio_data)}B type={content_type}")
+
+    # Tier 1: local GPU NIM
+    # Tier 2: NVIDIA cloud (only if NGC_API_KEY set — audio leaves device)
+    ngc_key = os.environ.get("NGC_API_KEY", "")
+    tiers = [(ASR_NIM_URL, "local")]
+    if ngc_key:
+        tiers.append((ASR_CLOUD_URL, "cloud"))
+
+    for base_url, label in tiers:
+        try:
+            text = await asyncio.to_thread(
+                _call_asr, base_url, audio_data, content_type
+            )
+            logger.info(f"[{rid}] ASR {label} OK: {len(text)} chars")
+            return {"transcript": text, "source": label}
+        except Exception as e:
+            logger.warning(f"[{rid}] ASR {label} failed: {e}")
+
+    logger.warning(f"[{rid}] ASR all tiers failed — client should fall back to Web Speech")
+    raise HTTPException(status_code=503, detail="ASR unavailable — use browser fallback")
+
+
 @app.post("/api/v1/caseworker/route")
 async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
     rid = getattr(request.state, "rid", "?")
@@ -312,35 +393,47 @@ async def caseworker_route(req: CaseworkerRouteRequest, request: Request):
         logger.warning(f"[{rid}] transcript rejected: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-    logger.debug(f"[{rid}] transcript: {cleaned[:120]!r}")
-    payload, method, nim_ms = compile_needs(cleaned)
+    logger.debug(f"[{rid}] transcript accepted: {len(cleaned)} chars")
+
+    if has_injection(cleaned):
+        logger.warning(f"[{rid}] prompt injection attempt detected — blocking")
+        raise HTTPException(status_code=400, detail="Input could not be processed. Please rephrase.")
+
+    payload, method, nim_ms = await compile_needs_async(cleaned)
     logger.info(f"[{rid}] compile method={method} latency={nim_ms:.0f}ms")
     logger.info(f"[{rid}] payload {payload.model_dump()}")
 
     origin = (req.origin_lat, req.origin_lon)
     gpu_mode = EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU
 
-    try:
-        itinerary_gpu, gpu_ms = solve(payload, datasets_gpu, origin, gpu_mode)
-        logger.info(
-            f"[{rid}] gpu solve {gpu_ms:.1f}ms "
-            f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary_gpu.items())}"
-        )
-    except Exception as e:
-        logger.error(f"[{rid}] GPU solve failed: {e}", exc_info=True)
+    results = await asyncio.gather(
+        asyncio.to_thread(solve, payload, datasets_gpu, origin, gpu_mode),
+        asyncio.to_thread(solve, payload, datasets_cpu, origin, EngineMode.CPU),
+        return_exceptions=True,
+    )
+    gpu_result, cpu_result = results
+
+    if isinstance(gpu_result, Exception):
+        logger.error(f"[{rid}] GPU solve failed: {gpu_result}", exc_info=True)
         raise HTTPException(status_code=500, detail="Routing engine error — please try again")
 
-    loop = asyncio.get_event_loop()
-    try:
-        itinerary_cpu, cpu_ms = await loop.run_in_executor(
-            None, solve, payload, datasets_cpu, origin, EngineMode.CPU
-        )
-    except Exception as e:
-        logger.warning(f"[{rid}] CPU benchmark failed: {e}")
+    itinerary_gpu, gpu_ms = gpu_result
+    logger.info(
+        f"[{rid}] gpu solve {gpu_ms:.1f}ms "
+        f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary_gpu.items())}"
+    )
+
+    if isinstance(cpu_result, Exception):
+        logger.warning(f"[{rid}] CPU benchmark failed: {cpu_result}")
         cpu_ms = None
+    else:
+        _, cpu_ms = cpu_result
+
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
-    _log_telemetry("caseworker", payload, method, gpu_ms, itinerary_gpu,
-                   req.origin_lat, req.origin_lon)
+    asyncio.create_task(asyncio.to_thread(
+        _log_telemetry, "caseworker", payload, method, gpu_ms, itinerary_gpu,
+        req.origin_lat, req.origin_lon,
+    ))
 
     return {
         "payload":               payload.model_dump(),
@@ -365,8 +458,8 @@ async def kiosk_session(req: KioskSessionRequest, request: Request):
         logger.warning(f"[{rid}] kiosk transcript rejected: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-    logger.debug(f"[{rid}] kiosk transcript: {cleaned[:120]!r}")
-    payload, method, nim_ms = compile_needs(cleaned)
+    logger.debug(f"[{rid}] kiosk transcript accepted: {len(cleaned)} chars")
+    payload, method, nim_ms = await compile_needs_async(cleaned)
     logger.info(f"[{rid}] kiosk compile method={method} latency={nim_ms:.0f}ms")
     logger.info(f"[{rid}] kiosk payload {payload.model_dump()}")
 
@@ -399,27 +492,34 @@ async def kiosk_route(req: KioskRouteRequest, request: Request):
 
     gpu_mode = EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU
 
-    try:
-        itinerary, gpu_ms = solve(payload, datasets_gpu, session.origin, gpu_mode)
-        logger.info(
-            f"[{rid}] kiosk solve {gpu_ms:.1f}ms "
-            f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary.items())}"
-        )
-    except Exception as e:
-        logger.error(f"[{rid}] kiosk solve failed: {e}", exc_info=True)
+    results = await asyncio.gather(
+        asyncio.to_thread(solve, payload, datasets_gpu, session.origin, gpu_mode),
+        asyncio.to_thread(solve, payload, datasets_cpu, session.origin, EngineMode.CPU),
+        return_exceptions=True,
+    )
+    gpu_result, cpu_result = results
+
+    if isinstance(gpu_result, Exception):
+        logger.error(f"[{rid}] kiosk solve failed: {gpu_result}", exc_info=True)
         raise HTTPException(status_code=500, detail="Routing engine error — please try again")
 
-    loop = asyncio.get_event_loop()
-    try:
-        _, cpu_ms = await loop.run_in_executor(
-            None, solve, payload, datasets_cpu, session.origin, EngineMode.CPU
-        )
-    except Exception as e:
-        logger.warning(f"[{rid}] kiosk CPU benchmark failed: {e}")
+    itinerary, gpu_ms = gpu_result
+    logger.info(
+        f"[{rid}] kiosk solve {gpu_ms:.1f}ms "
+        f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary.items())}"
+    )
+
+    if isinstance(cpu_result, Exception):
+        logger.warning(f"[{rid}] kiosk CPU benchmark failed: {cpu_result}")
         cpu_ms = None
+    else:
+        _, cpu_ms = cpu_result
+
     _last_benchmark.update({"gpu_ms": gpu_ms, "cpu_ms": cpu_ms})
-    _log_telemetry("kiosk", payload, "kiosk", gpu_ms, itinerary,
-                   session.origin[0], session.origin[1])
+    asyncio.create_task(asyncio.to_thread(
+        _log_telemetry, "kiosk", payload, "kiosk", gpu_ms, itinerary,
+        session.origin[0], session.origin[1],
+    ))
 
     return {
         "itinerary":    itinerary,
@@ -435,27 +535,17 @@ async def caseworker_briefing(req: BriefingRequest, request: Request):
     if shelters is None:
         raise HTTPException(status_code=503, detail="Shelter data not loaded")
 
-    total, available, by_sector = 0, 0, {}
+    total, available = 0, 0
     try:
-        pdf = shelters.to_pandas() if hasattr(shelters, "to_pandas") else shelters
-        total     = int(pdf["CAPACITY_ACTUAL_BED"].sum())
-        available = int(pdf["UNOCCUPIED_BEDS"].sum())
-        by_sector = (
-            pdf.groupby("SECTOR")["UNOCCUPIED_BEDS"]
-            .sum()
-            .astype(int)
-            .to_dict()
-        )
-        summary = (
-            f"Total beds: {total}. Available: {available}. "
-            f"By sector: {by_sector}. Current time: {req.current_time_iso}."
+        total, available, summary = await asyncio.to_thread(
+            _briefing_stats, shelters, req.current_time_iso
         )
         logger.info(f"[{rid}] briefing total={total} available={available}")
     except Exception as e:
         logger.error(f"[{rid}] briefing data error: {e}", exc_info=True)
         summary = f"Shelter data summary unavailable: {e}"
 
-    briefing = generate_briefing(summary)
+    briefing = await generate_briefing_async(summary)
     return {
         "briefing_text":    briefing,
         "shelter_snapshot": {"total_beds": total, "available_beds": available},
@@ -466,7 +556,7 @@ async def caseworker_briefing(req: BriefingRequest, request: Request):
 async def handoff_script(req: HandoffRequest, request: Request):
     rid = getattr(request.state, "rid", "?")
     logger.info(f"[{rid}] handoff facility={req.facility_name!r}")
-    script = generate_handoff_script(req.facility_name, req.payload)
+    script = await generate_handoff_script_async(req.facility_name, req.payload)
     return {
         "script":   script,
         "facility": req.facility_name,

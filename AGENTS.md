@@ -45,3 +45,21 @@ The Toronto CKAN dataset uses `ORGANIZATION_NAME`, `SHELTER_ADDRESS`, `SECTOR`, 
 - Visible question text (questions are TTS only)
 
 The tab-navigation audit is: press Tab through `/kiosk` — the only focusable element should be the VoiceOrb. Enforce this before every commit that touches GatewayB components.
+
+## Rule 7 — All user input is PII-scrubbed before LLM inference
+
+`pii_scrubber.redact_pii()` is called inside `voice_session.clean_transcript()` — the single entry point for all text that reaches `compile_needs()`. This covers both kiosk transcripts and caseworker clinical notes.
+
+Patterns redacted: Canadian phone numbers, email addresses, Social Insurance Numbers (SIN), Ontario OHIP health card numbers, postal codes, and numeric dates.
+
+**Never remove or bypass this call.** If you change `clean_transcript()`, verify `redact_pii()` is still called after whitespace normalization and before `return`.
+
+Log audit: the log message is `"PII redacted: N item(s) (type1, type2)"` — it counts what was redacted but never logs the original or redacted text content.
+
+## Rule 8 — Prompt injection attempts on Gateway A are blocked before the LLM
+
+`pii_scrubber.has_injection()` is called in `caseworker_route()` (`main.py`) after `clean_transcript()`. If it returns `True`, the endpoint raises HTTP 400 with a neutral message and logs a warning at `WARNING` level.
+
+- **Only applied to Gateway A** (caseworker text input) — kiosk voice transcripts are low-risk
+- The HTTP 400 message must not reveal what triggered the block
+- Never log the injected text at INFO or above — `WARNING` message only

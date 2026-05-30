@@ -2,9 +2,8 @@
 type OrbState = 'idle' | 'listening' | 'processing' | 'speaking';
 
 interface Props {
-  state:         OrbState;
-  onPointerDown: () => void;
-  onPointerUp:   () => void;
+  state:   OrbState;
+  onClick: () => void;
 }
 
 const STATE_CONFIG: Record<OrbState, {
@@ -20,7 +19,7 @@ const STATE_CONFIG: Record<OrbState, {
     ringColor:   'rgba(26,147,187,0.5)',
     glowColor:   'rgba(26,147,187,0.15)',
     glowOuter:   'rgba(10,42,61,0.3)',
-    label:       'Hold to speak',
+    label:       'Tap to speak',
   },
   // Listening: brighter, warm blue — attentive and present
   listening: {
@@ -28,7 +27,7 @@ const STATE_CONFIG: Record<OrbState, {
     ringColor:   'rgba(56,174,210,0.8)',
     glowColor:   'rgba(56,174,210,0.3)',
     glowOuter:   'rgba(26,147,187,0.2)',
-    label:       'Listening…',
+    label:       'Tap when done',
   },
   // Processing: teal-blue — working, calm
   processing: {
@@ -48,14 +47,13 @@ const STATE_CONFIG: Record<OrbState, {
   },
 };
 
-export function VoiceOrb({ state, onPointerDown, onPointerUp }: Props) {
+export function VoiceOrb({ state, onClick }: Props) {
   const cfg = STATE_CONFIG[state];
 
   return (
     <div
       className="flex flex-col items-center justify-center h-full select-none"
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
+      onClick={onClick}
       onContextMenu={e => e.preventDefault()}
       style={{ touchAction: 'none' }}
     >

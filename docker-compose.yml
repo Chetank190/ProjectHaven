@@ -1,5 +1,9 @@
 version: "3.9"
 
+# Default layout: GPU for LLM (Gemma NIM) only; FastAPI routing on CPU.
+# Start model only:  docker compose up nim
+# Start model + API:  docker compose up
+
 services:
   # LLM inference — Gemma 3n E4B via NVIDIA NIM (NVFP4, Blackwell-optimized)
   # Alternative: start llama.cpp manually for Nemotron (see README §GX10 Setup)
@@ -15,30 +19,53 @@ services:
       - "8001:8000"           # NIM OpenAI API on host :8001
     restart: unless-stopped
 
-  # FastAPI backend — runs inside RAPIDS container for cuDF/cuML
-  backend:
-    image: rapidsai/base:25.06-cuda12-py3.12
+  # ASR inference — Parakeet-0.6B-CTC (NVIDIA NIM, ~3 GB VRAM, English)
+  # Best available NVIDIA ASR NIM (Canary-Qwen-2.5B has no NIM container yet)
+  # NOTE: aarch64/GB10 support not yet officially documented by NVIDIA;
+  #       backend falls back to NVIDIA cloud ASR if this container fails to start.
+  asr:
+    image: nvcr.io/nim/nvidia/parakeet-0-6b-ctc-en-us:latest
     runtime: nvidia
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      - NIM_HTTP_API_PORT=9000
+      - NIM_GRPC_API_PORT=50051
+    volumes:
+      - asr-cache:/opt/nim/.cache
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+
+  # FastAPI backend — CPU only (pandas + scikit-learn); no GPU runtime
+  backend:
+    image: python:3.12-slim
     working_dir: /app
     volumes:
       - .:/app
+      - pip-cache:/root/.cache/pip   # persist pip cache across restarts
     ports:
-      - "8000:8000"           # FastAPI on host :8000
+      - "8000:8000"
     command: >
       bash -c "
         pip install -r backend/requirements.txt -q &&
-        uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+        uvicorn backend.main:app --host 0.0.0.0 --port 8000
       "
     environment:
-      - NIM_ENDPOINT=http://localhost:30000/v1
+      - FORCE_CPU_SOLVER=1
+      - NIM_ENDPOINT=http://nim:8000/v1
       - NIM_FALLBACK=http://nim:8000/v1
       - NVIDIA_CLOUD_ENDPOINT=https://integrate.api.nvidia.com/v1
       - NVIDIA_CLOUD_MODEL=google/gemma-3n-e4b-it
+      - ASR_NIM_URL=http://asr:9000
+      - ASR_CLOUD_URL=https://integrate.api.nvidia.com/v1
       - NGC_API_KEY=${NGC_API_KEY}
       - NIM_API_KEY=${NIM_API_KEY:-not-needed}
     depends_on:
       - nim
+      - asr
     restart: unless-stopped
 
 volumes:
   nim-cache:
+  asr-cache:
+  pip-cache:

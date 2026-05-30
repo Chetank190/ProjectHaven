@@ -5,6 +5,7 @@ Three call types: triage (JSON), briefing (text), handoff script (text).
 Regex fallback for triage when LLM is offline.
 """
 
+import asyncio
 import os
 import re
 import json
@@ -16,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import logging
 
-from openai import OpenAI
+from openai import OpenAI, APIConnectionError, APITimeoutError
 from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,10 @@ def compile_needs(text: str) -> tuple[NeedsPayload, str, float]:
                 ms = (time.perf_counter() - t0) * 1000
                 logger.info(f"NIM triage OK endpoint={endpoint} model={model} latency={ms:.0f}ms")
                 return payload, "nim", ms
+            except (APIConnectionError, APITimeoutError) as e:
+                # Don't retry on timeout/connection failure — move to next tier immediately.
+                logger.warning(f"NIM timeout/connection error at {endpoint}: {e} — skipping tier")
+                break
             except Exception as e:
                 logger.warning(f"NIM triage attempt {attempt + 1} failed at {endpoint}: {e}")
 
@@ -144,6 +149,18 @@ def generate_handoff_script(facility_name: str, payload: NeedsPayload) -> str:
 
     logger.warning("NIM handoff all tiers failed — returning placeholder")
     return "Script unavailable — compose the call manually using the client's needs above."
+
+
+async def compile_needs_async(text: str) -> tuple[NeedsPayload, str, float]:
+    return await asyncio.to_thread(compile_needs, text)
+
+
+async def generate_briefing_async(shelter_summary: str) -> str:
+    return await asyncio.to_thread(generate_briefing, shelter_summary)
+
+
+async def generate_handoff_script_async(facility_name: str, payload: NeedsPayload) -> str:
+    return await asyncio.to_thread(generate_handoff_script, facility_name, payload)
 
 
 def kiosk_voice_payload(needs_transcript: str, eligibility_answers: dict) -> NeedsPayload:

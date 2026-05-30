@@ -6,6 +6,7 @@ import { useSpeech }       from '../shared/useSpeech';
 import { VoiceOrb }        from './VoiceOrb';
 import { EligibilityFlow } from './EligibilityFlow';
 import { KioskItinerary }  from './KioskItinerary';
+import { HavenMatrixLogo } from '../shared/HavenMatrixLogo';
 
 type KioskState =
   | 'idle' | 'hub_select' | 'recording'
@@ -15,7 +16,10 @@ type KioskState =
 const HUB_NAMES = Object.keys(KIOSK_HUBS);
 
 export function KioskPage() {
-  const { speak, startListening, stopListening, transcript, clearTranscript } = useSpeech();
+  const {
+    speak, startListening, stopListening, transcript, clearTranscript,
+    startRecording, stopRecording, transcribeAudio,
+  } = useSpeech();
   const [kioskState,  setKioskState]  = useState<KioskState>('idle');
   const [hubName,     setHubName]     = useState<string>(KIOSK_DEFAULT_HUB);
   const [sessionId,   setSessionId]   = useState<string | null>(null);
@@ -44,29 +48,40 @@ export function KioskPage() {
   useEffect(() => {
     if (kioskState === 'idle') {
       const timer = setTimeout(() => {
-        speak('Haven Matrix. Hold the orb and tell me what you need.');
+        speak("Welcome. I'm here to help you find shelter, food, or care. Tap the button and tell me what you need.");
       }, 800);
       return () => clearTimeout(timer);
     }
   }, [kioskState]);
 
-  const handleOrbDown = () => {
-    if (kioskState !== 'idle' && kioskState !== 'done') return;
-    setError(null);
-    clearTranscript();
-    startListening(false);
-    setKioskState('recording');
-    resetIdle();
-  };
+  // Tap-to-toggle: first tap starts recording (ASR NIM) + listening (Web Speech live display)
+  // Second tap: stop both, try ASR NIM transcript first, fall back to Web Speech
+  const handleOrbTap = async () => {
+    if (kioskState === 'idle' || kioskState === 'done') {
+      setError(null);
+      clearTranscript();
+      startListening(false);   // Web Speech API — live transcript display only
+      startRecording();        // MediaRecorder — audio blob for ASR NIM
+      setKioskState('recording');
+      resetIdle();
+      return;
+    }
 
-  const handleOrbUp = async () => {
     if (kioskState !== 'recording') return;
     stopListening();
     setKioskState('processing');
 
-    const captured = transcript;
+    // Collect audio blob; fall back to Web Speech transcript if ASR unavailable
+    const blob = await stopRecording();
+    let captured = '';
+    if (blob && blob.size > 0) {
+      const asrText = await transcribeAudio(blob);
+      if (asrText) captured = asrText;
+    }
+    if (!captured) captured = transcript;  // Web Speech fallback
+
     if (!captured || captured.trim().length < VOICE_MIN_CHARS) {
-      speak("I didn't hear anything. Hold the orb and try again.", () => setKioskState('idle'));
+      speak("I'm sorry, I didn't catch that. Please tap the button and try again.", () => setKioskState('idle'));
       return;
     }
 
@@ -84,7 +99,7 @@ export function KioskPage() {
         await submitRoute(r.data.session_id, {});
       }
     } catch {
-      const msg = "Something went wrong. Please try again.";
+      const msg = "I'm sorry, something went wrong. Please tap to try again.";
       setError(msg);
       speak(msg, () => { setError(null); setKioskState('idle'); });
     }
@@ -101,7 +116,7 @@ export function KioskPage() {
       setRouteResult(r.data);
       setKioskState('speaking');
     } catch {
-      const msg = "I couldn't find your route. Please call 211 for help.";
+      const msg = "I'm sorry, I wasn't able to find anything right now. You can also call 2-1-1 for help.";
       setError(msg);
       speak(msg, () => { setError(null); setKioskState('idle'); });
     }
@@ -161,7 +176,7 @@ export function KioskPage() {
   );
 
   return (
-    <div className="min-h-screen flex flex-col"
+    <div className="min-h-screen flex flex-col relative"
       style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #0D2436 50%, #061825 100%)' }}>
 
       {/* Subtle hub label */}
@@ -171,12 +186,10 @@ export function KioskPage() {
       </div>
 
       {/* Haven Matrix wordmark */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2">
-        <svg className="w-5 h-5" style={{ color: 'rgba(56,174,210,0.5)' }} fill="currentColor" viewBox="0 0 20 20">
-          <path fillRule="evenodd" d="M10 1.944A11.954 11.954 0 012.166 5C2.056 5.649 2 6.319 2 7c0 5.225 3.34 9.67 8 11.317C14.66 16.67 18 12.225 18 7c0-.682-.057-1.35-.166-2.001A11.954 11.954 0 0110 1.944z" clipRule="evenodd"/>
-        </svg>
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2">
+        <HavenMatrixLogo size={22} />
         <span className="text-xs font-medium tracking-widest uppercase"
-          style={{ color: 'rgba(114,200,226,0.45)' }}>
+          style={{ color: 'rgba(114,200,226,0.55)' }}>
           Haven Matrix
         </span>
       </div>
@@ -189,12 +202,21 @@ export function KioskPage() {
         </div>
       )}
 
-      <div className="flex-1">
+      <div className="flex-1 relative">
         <VoiceOrb
           state={orbState}
-          onPointerDown={handleOrbDown}
-          onPointerUp={handleOrbUp}
+          onClick={handleOrbTap}
         />
+
+        {/* Live transcript — shown while recording and briefly during processing */}
+        {(kioskState === 'recording' || kioskState === 'processing') && transcript && (
+          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-full max-w-sm px-6 text-center pointer-events-none">
+            <p className="text-xl font-light leading-relaxed"
+               style={{ color: 'rgba(114,200,226,0.85)' }}>
+              {transcript}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

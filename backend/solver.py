@@ -80,7 +80,9 @@ def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:
         try:
             import pandas as _pd
             mask = _pd.Series([True] * len(df), index=df.index if hasattr(df, "index") else range(len(df)))
-            if payload.has_id is False and "requires_id" in df.columns:
+            # Conservative: exclude ID-required facilities unless we *know* the person has ID.
+            # has_id=None means "not asked" — same as False to avoid a door rejection.
+            if payload.has_id is not True and "requires_id" in df.columns:
                 mask = mask & (df["requires_id"].astype(bool) == False)
             if payload.sobriety_status == "using" and "harm_reduction" in df.columns:
                 mask = mask & (df["harm_reduction"].astype(bool) == True)

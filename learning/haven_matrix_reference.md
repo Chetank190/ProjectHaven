@@ -291,125 +291,38 @@ ssh asus@gx10-3cd8.local
 # When prompted: type yes → then password: password
 ```
 
-**Do these in parallel once SSH'd in. Some steps take 30-60 minutes.**
+**Team default: models on GX10 GPU only; backend + frontend on Mac.** See [`gx10_access_and_gpu_guide.md`](gx10_access_and_gpu_guide.md).
 
-### Immediate on arrival (all in parallel)
+### On GX10 — download/store/load models (SSH)
 
 ```bash
-# Terminal 1 — verify hardware
-nvidia-smi
-uname -m      # must show aarch64
-
-# Terminal 2 — pull RAPIDS container (large, start now)
-docker pull rapidsai/base:25.06-cuda12-py3.12
-
-# Terminal 3 — download Nemotron (~38 GB, start now)
-pip install huggingface-hub
-huggingface-cli download ggml-org/NVIDIA-Nemotron-3-Nano-Omni \
-  nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf \
-  --local-dir ~/models/nemotron
-
-# Terminal 4 — clone repo and install frontend deps
-git clone <repo-url> ~/ProjectHaven
-cd ~/ProjectHaven/frontend && npm install
+cd ~/ProjectHaven && cp .env.example .env   # NGC_API_KEY
+docker compose up nim -d                  # Gemma → GPU :8001, stored in volume nim-cache
+docker compose logs -f nim                # first run: long NGC pull
+curl -s http://localhost:8001/v1/models | head && nvidia-smi
 ```
 
-### While downloads run — build llama.cpp with CUDA
+Optional: `docker compose up asr -d` for Parakeet on GPU :9000.
+
+### On Mac — backend + frontend
 
 ```bash
-git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
-cd ~/llama.cpp
-cmake -B build -DGGML_CUDA=ON
-cmake --build build -j$(nproc)
-# Takes 15-20 min on aarch64
-```
+cp .env.example .env
+# NIM_ENDPOINT=http://100.81.85.39:8001/v1  FORCE_CPU_SOLVER=1
 
-### Once Nemotron download completes — start LLM server
-
-```bash
-~/llama.cpp/build/bin/llama-server \
-  --model ~/models/nemotron/nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf \
-  --host 0.0.0.0 \
-  --port 30000 \
-  --n-gpu-layers 99 \
-  --ctx-size 8192 \
-  --threads 8
-
-# Keep this terminal open
-```
-
-Test it:
-```bash
-curl http://localhost:30000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"nemotron","messages":[{"role":"user","content":"Reply with exactly: {\"test\":true}"}]}'
-```
-
-### Once RAPIDS container download completes — start backend
-
-```bash
-cd ~/ProjectHaven
-docker run \
-  --gpus all \
-  --network host \
-  -v $(pwd):/app \
-  -w /app \
-  -it rapidsai/base:25.06-cuda12-py3.12 \
-  bash
-```
-
-Inside the container:
-```bash
-# Install Python deps
-pip install -r backend/requirements.txt -q
-
-# Verify RAPIDS
-python3 -c "import cudf; import cuml; print('RAPIDS OK', cudf.__version__)"
-
-# Verify datasets on GPU
-python3 backend/data_ingestion.py --verify --mode gpu
-
-# Run benchmark — this is the number you show judges
-python3 backend/solver.py --benchmark
-# Expected: GPU: ~7ms  CPU: ~280ms  Speedup: ~40×
-
-# Start FastAPI
+source .vhaven/bin/activate
+set -a && source .env && set +a
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+cd frontend && npm run dev
 ```
 
-### Start frontend (host OS, new terminal)
+### Verify (Mac)
 
 ```bash
-cd ~/ProjectHaven/frontend && npm run dev
-```
-
-### Verify everything
-
-```bash
-# Health — should show rapids_mode: "gpu"
-curl http://localhost:8000/api/v1/health
-
-# After one caseworker route request:
-curl http://localhost:8000/api/v1/benchmark
-# Expected: last_gpu_ms < 10, speedup > 10
-```
-
-### If Nemotron isn't downloaded in time — NIM fallback
-
-```bash
-# Zero code change needed — update .env
-echo "NIM_ENDPOINT=http://localhost:8001/v1" >> .env
-echo "NIM_FALLBACK=http://localhost:8001/v1" >> .env
-
-# Start via Docker Compose (recommended)
-docker compose up
-
-# Or start NIM container manually
-docker run --gpus all --network host \
-  -e NGC_API_KEY=$NGC_API_KEY \
-  -v nim-cache:/opt/nim/.cache \
-  -p 8001:8000 \
-  nvcr.io/nim/google/gemma-3n-e4b-it:latest
+curl -s http://localhost:8000/api/v1/health        # rapids_mode: cpu
+curl -s http://100.81.85.39:8001/v1/models | head # GX10 model reachable
+# POST /caseworker/route → compile_method: nim
 ```
 
 ### Use the UI from your laptop (SSH port-forward)

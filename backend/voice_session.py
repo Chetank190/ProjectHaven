@@ -22,6 +22,7 @@ from config import (
     ASK_GROUP_FOR_PILLARS,
 )
 from nim_compiler import NeedsPayload
+from pii_scrubber import redact_pii
 
 
 @dataclass
@@ -130,6 +131,14 @@ def clean_transcript(raw: str) -> str:
         cleaned = cleaned.replace(f" {f} ", " ")
 
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    # Redact Canadian PII patterns before any LLM inference
+    cleaned, pii_count, pii_types = redact_pii(cleaned)
+    if pii_count > 0:
+        logging.getLogger(__name__).info(
+            f"PII redacted: {pii_count} item(s) ({', '.join(pii_types)})"
+        )
+
     return cleaned
 
 
@@ -140,9 +149,9 @@ def build_tts_itinerary_script(itinerary: dict, client_name: str | None = None) 
     """
     lines = []
     greeting = (
-        f"Here's what I found for {client_name}."
+        f"I found some places that can help {client_name} today."
         if client_name
-        else "Here's what I found for you."
+        else "I found some places that can help you today."
     )
     lines.append(greeting)
 
@@ -150,23 +159,25 @@ def build_tts_itinerary_script(itinerary: dict, client_name: str | None = None) 
 
     if not stops:
         return (
-            "I'm sorry, I couldn't find available resources nearby right now. "
-            "Please call 211 for help."
+            "I'm sorry, I couldn't find open resources nearby right now. "
+            "Please call two-one-one for help."
         )
 
+    order_words = {1: "First", 2: "Next", 3: "Also", 4: "Also", 5: "Also"}
     for i, (pillar, r) in enumerate(stops, 1):
         walk = int(r.get("distance_walk_min", 0))
         transit = "There's a TTC stop nearby." if r.get("transit_accessible") else ""
+        lead = order_words.get(i, "Also")
 
-        line = f"Stop {i}: {r.get('name', 'Unknown facility')}, for {pillar}. "
-        line += f"About a {walk} minute walk, at {r.get('address', 'address unavailable')}. {transit}"
+        line = f"{lead}, go to {r.get('name', 'a facility nearby')}, for {pillar}. "
+        line += f"It's about a {walk} minute walk, at {r.get('address', 'the address shown on screen')}. {transit}"
 
         if r.get("intake_preparation"):
-            line += f" When you arrive: {r['intake_preparation']}"
+            line += f" When you get there: {r['intake_preparation']}"
 
         lines.append(line.strip())
 
-    lines.append("Good luck. You can ask me again any time.")
+    lines.append("I hope this helps. Come back any time you need.")
     return " ".join(lines)
 
 

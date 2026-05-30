@@ -46,9 +46,44 @@ cd frontend && npm install && npm run dev
 # Swagger:    http://localhost:8000/docs
 ```
 
-**NIM/LLM is optional for local dev.** The system falls back to regex keyword matching automatically when LLM endpoints are unreachable.
+**NIM/LLM is optional for local dev.** Without a GX10 connection, the system falls back to regex keyword matching automatically.
 
-> **GX10 access + GPU model setup:** see [`learning/gx10_access_and_gpu_guide.md`](learning/gx10_access_and_gpu_guide.md) (local team doc).
+> **Mac + GX10 setup (team default):** backend and frontend on Mac; models on GX10 GPU only → [`learning/gx10_access_and_gpu_guide.md`](learning/gx10_access_and_gpu_guide.md)
+
+---
+
+## Development Architecture (Mac + GX10)
+
+**Default:** run **backend + frontend on your Mac**; run **models only on the GX10 GPU** over Tailscale.
+
+```
+Mac (:3000 frontend, :8000 backend CPU)
+    │  NIM_ENDPOINT=http://100.81.85.39:8001/v1
+    ▼  Tailscale
+GX10 — docker compose up nim -d  (Gemma 3n on GPU :8001)
+       optional: docker compose up asr -d  (Parakeet on GPU :9000)
+```
+
+| Step | Where | Command |
+|------|-------|---------|
+| 1. Load model on GPU | GX10 (SSH) | `docker compose up nim -d` |
+| 2. Backend | Mac | `uvicorn backend.main:app --port 8000 --reload` |
+| 3. Frontend | Mac | `cd frontend && npm run dev` |
+
+Mac `.env` (copy from `.env.example`):
+
+```bash
+GX10_TAILSCALE_IP=100.81.85.39          # your unit's Tailscale IP
+FORCE_CPU_SOLVER=1
+NIM_ENDPOINT=http://100.81.85.39:8001/v1
+NIM_FALLBACK=http://100.81.85.39:8001/v1
+```
+
+**Model storage:** weights download automatically into Docker volume `nim-cache` on the GX10 on first NIM start (requires `NGC_API_KEY` in GX10 `.env`). Nothing is stored on the Mac.
+
+**Verify:** `compile_method: "nim"` on a route request; `rapids_mode: "cpu"` on `/api/v1/health`.
+
+Full walkthrough: [`learning/gx10_access_and_gpu_guide.md`](learning/gx10_access_and_gpu_guide.md)
 
 ---
 
@@ -120,89 +155,80 @@ nmcli con delete gx10-3cd8-Hotspot   # delete so it doesn't reconnect on reboot
 
 ---
 
-### Use the UI from your laptop (SSH port-forward)
+### Use the UI from your Mac (default — no port-forward needed)
+
+Backend and frontend run locally on the Mac. Only ensure Tailscale is Connected and GX10 NIM is up. Open http://localhost:3000/caseworker.
+
+If `:8001` is unreachable over Tailscale, tunnel the model port:
 
 ```bash
-ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
+ssh -L 8001:localhost:8001 asus@100.81.85.39
+# then set NIM_ENDPOINT=http://localhost:8001/v1 in Mac .env
 ```
-
-Then open http://localhost:3000/caseworker on your laptop while services run on the GX10.
 
 ---
 
-## GX10 Software Setup (NVIDIA Grace Blackwell)
+## GX10 — Models on GPU Only
 
-Two GPU workloads must run for full demo mode: **LLM triage** (Nemotron on :30000 or Gemma NIM on :8001) and **KNN solver** (RAPIDS on :8000).
+Backend and frontend run on **your Mac**. The GX10 only hosts **NIM model containers** on GPU.
 
-### Option A — Docker Compose (fastest path to GPU backend + NIM fallback)
+> Full guide: [`learning/gx10_access_and_gpu_guide.md`](learning/gx10_access_and_gpu_guide.md)
+
+### On the GX10 (SSH)
 
 ```bash
 cd ~/ProjectHaven
-# Set NGC_API_KEY in .env if using cloud NIM tier
-docker compose up
+cp .env.example .env          # set NGC_API_KEY from build.nvidia.com
+docker compose up nim -d        # LLM only — Gemma 3n on GPU :8001
+docker compose logs -f nim      # wait until ready (first run: long download)
+
+# optional ASR on GPU
+docker compose up asr -d
 ```
 
-Starts Gemma 3n NIM on :8001 and FastAPI + RAPIDS on :8000. Still start Nemotron separately (Option B Step 5) for primary LLM, or point `NIM_ENDPOINT` at :8001.
-
-### Option B — Manual setup (Nemotron + RAPIDS)
+Verify on GX10:
 
 ```bash
-# Step 1 — Verify hardware (run after SSH in)
-nvidia-smi && uname -m   # must show GB10 and aarch64
+curl -s http://localhost:8001/v1/models | head
+nvidia-smi
+```
 
-# Step 2 — Pull RAPIDS container (start at check-in — large image)
-docker pull rapidsai/base:25.06-cuda12-py3.12
+**Do not** run `docker compose up` (full stack) unless you also want backend on the box.
 
-# Step 3 — Download Nemotron weights (~38 GB)
-pip install huggingface-hub
-huggingface-cli download ggml-org/NVIDIA-Nemotron-3-Nano-Omni \
-  nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf --local-dir ~/models/nemotron
+### On your Mac
 
-# Step 4 — Build llama.cpp with CUDA
-git clone https://github.com/ggml-org/llama.cpp
-cd llama.cpp && cmake -B build -DGGML_CUDA=ON && cmake --build build -j$(nproc)
+```bash
+cp .env.example .env
+# set GX10_TAILSCALE_IP and NIM_ENDPOINT=http://<ip>:8001/v1
 
-# Step 5 — Start Nemotron on GPU port 30000
-./build/bin/llama-server \
-  --model ~/models/nemotron/nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf \
-  --host 0.0.0.0 --port 30000 --n-gpu-layers 99 --ctx-size 8192
-
-# Step 6 — Start RAPIDS container with project mounted
-cd ~/ProjectHaven
-docker run --gpus all --network host -v $(pwd):/app -w /app \
-  -it rapidsai/base:25.06-cuda12-py3.12 bash
-
-# Step 7 — Inside container
-pip install -r backend/requirements.txt
-python -c "import cudf, cuml; print('RAPIDS OK')"
-python backend/data_ingestion.py --verify --mode gpu
-python backend/solver.py --benchmark
-
-# Step 8 — Start FastAPI (inside container)
+source .vhaven/bin/activate
+set -a && source .env && set +a
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Step 9 — On host OS, start React
 cd frontend && npm run dev
 ```
 
-Verify: `curl http://localhost:8000/api/v1/health` → `rapids_mode: gpu`; route a caseworker request → `compile_method: nim`.
+Verify on Mac: `curl localhost:8000/api/v1/health` → `"rapids_mode":"cpu"`; route → `"compile_method":"nim"`.
+
+### Optional — Nemotron or GPU KNN on GX10
+
+See gx10 guide appendix and README legacy options only if benchmarking on-box.
 
 ---
 
 ## Architecture
 
 ```
-Caseworker (React :3000/caseworker)    Kiosk (React :3000/kiosk)
-         │ HTTP POST via Vite proxy              │
-         ▼                                       ▼
-         FastAPI :8000
-         ├── NIM Compiler (cloud NIM → Nemotron :30000 → Gemma NIM :8001 → regex)
-         └── RAPIDS Solver
-             ├── cuDF: 7 datasets (290 shelters, 25 rehab,
-             │         20 food, 15 hygiene, 20 grassroots,
-             │         55 OSM, 9,369 TTC stops)
-             └── cuML: NearestNeighbors KNN (haversine, <10ms)
-                  └── Constraint masking: has_id, sobriety, group
+Mac — React :3000/caseworker | :3000/kiosk
+         │ HTTP POST via Vite proxy → localhost:8000
+         ▼
+Mac — FastAPI :8000 (CPU, FORCE_CPU_SOLVER=1)
+         │ HTTP over Tailscale → GX10 :8001
+         ▼
+GX10 — NIM Gemma 3n :8001 (GPU)  [optional ASR :9000]
+         │
+         └── Solver on Mac CPU (pandas/sklearn, ~400ms)
+              └── 7 datasets + constraint masking
 ```
 
 ---
@@ -226,7 +252,7 @@ Caseworker (React :3000/caseworker)    Kiosk (React :3000/kiosk)
 | Component | Primary | Fallback |
 |-----------|---------|----------|
 | LLM | Cloud NIM Gemma 3n (if `NGC_API_KEY`) → Nemotron (llama.cpp :30000) | Gemma 3n E4B (NIM :8001) → regex |
-| Data engine | cuDF + cuML (GPU) | pandas + scikit-learn (CPU) |
+| Data engine | cuDF + cuML (GPU) | pandas + scikit-learn (CPU — **GX10 default**) |
 | Shelter data | Toronto CKAN (live) | Cached `data/shelters.csv` |
 
 ---
@@ -234,18 +260,18 @@ Caseworker (React :3000/caseworker)    Kiosk (React :3000/kiosk)
 ## Environment Variables
 
 ```bash
-# .env (never commit)
-NGC_API_KEY=your_ngc_key_here
+# Mac .env — backend + frontend on Mac, models on GX10 (team default)
+GX10_TAILSCALE_IP=100.81.85.39
+FORCE_CPU_SOLVER=1
+NIM_ENDPOINT=http://100.81.85.39:8001/v1
+NIM_FALLBACK=http://100.81.85.39:8001/v1
+ASR_NIM_URL=http://100.81.85.39:9000
+NGC_API_KEY=your_ngc_key_here          # optional cloud LLM/ASR fallback
+NIM_API_KEY=not-needed
+VITE_KIOSK_HUB=Union Station
 
-# LLM endpoints
-NIM_ENDPOINT=http://localhost:30000/v1          # llama.cpp Nemotron (GX10 primary)
-NIM_FALLBACK=http://localhost:8001/v1          # local NIM Gemma 3n container
-NVIDIA_CLOUD_ENDPOINT=https://integrate.api.nvidia.com/v1
-NVIDIA_CLOUD_MODEL=google/gemma-3n-e4b-it
-NIM_API_KEY=not-needed                         # override if your NIM server requires auth
-
-# Frontend
-VITE_KIOSK_HUB=Union Station                   # Pre-configure kiosk location
+# GX10 .env — on the box only (for docker compose up nim)
+# NGC_API_KEY=your_ngc_key_here
 ```
 
 ---

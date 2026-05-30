@@ -99,6 +99,9 @@ NIM_FALLBACK    = os.environ.get("NIM_FALLBACK", "http://localhost:8001/v1")    
 NIM_MODEL       = "nemotron"
 NIM_TIMEOUT_SEC = 15
 NIM_MAX_RETRIES = 2
+
+# Skip cuDF/cuML when true — reserve GPU for LLM (Gemma NIM / llama.cpp)
+FORCE_CPU_SOLVER = os.environ.get("FORCE_CPU_SOLVER", "0").lower() in ("1", "true", "yes")
 ```
 
 **Solver weights (FR-5 Congestion Balancer):**
@@ -536,8 +539,7 @@ From `AGENTS.md` — apply to ALL AI tools working on this codebase:
 
 Not yet fixed — reference for next LLM:
 
-1. **`has_id=None` treated as "has ID"** (`solver.py:elig()`)
-   When `has_id` is not asked, mask returns True for ID-required facilities. Could route user somewhere they get rejected. Fix: treat None conservatively as False, or ensure the question is always asked when any candidate facility requires ID.
+1. ~~**`has_id=None` treated as "has ID"**~~ **FIXED** — `solver.py:elig()` now uses `has_id is not True`, so `None` conservatively excludes ID-required facilities.
 
 2. **Shelter sector mapping incomplete** (`solver.py:_apply_masks()`)
    `sector_map` covers standard values only. Non-standard SECTOR values (e.g. "Couples") silently excluded. Fix: add catch-all or extend the mapping.
@@ -554,8 +556,7 @@ Not yet fixed — reference for next LLM:
 6. **BenchmarkPanel fetch on unmount** (`BenchmarkPanel.tsx`)
    Async fetch may try to set state on unmounted component. Fix: use AbortController in cleanup.
 
-7. **NIM retry loop treats all errors equally** (`nim_compiler.py:compile_needs()`)
-   Network timeout (15s x 2 retries x 2 endpoints = 60s max) before regex fallback. Fix: detect `requests.exceptions.Timeout` and skip remaining retries.
+7. ~~**NIM retry loop treats all errors equally**~~ **FIXED** — `nim_compiler.py` now imports `APIConnectionError, APITimeoutError` from openai and `break`s the inner retry loop on either, immediately moving to the next tier instead of waiting 15s × 3 retries.
 
 8. **Caseworker origin hardcoded** (`CaseworkerPage.tsx`)
    `origin_lat: 43.6532, origin_lon: -79.3832` hardcoded. Fix: geolocation API or location picker.
@@ -650,22 +651,15 @@ Change `NIM_MODEL` in `config.py`. Any OpenAI-spec server works. Triage prompt's
 
 The GX10 has **no Wi-Fi**. Initial access: connect laptop to hotspot → SSH → `yes` → `password`. For persistent remote access: install Tailscale on laptop → SSH in → `sudo tailscale up` → authorize URL.
 
-### Two GPU workloads
+### Architecture (team default)
 
-Both must run for full demo mode (`compile_method: nim` + `rapids_mode: gpu`):
+| Where | What | GPU? |
+|-------|------|------|
+| **GX10** | `docker compose up nim` (+ optional `asr`) | Yes — models in Docker volumes `nim-cache`, `asr-cache` |
+| **Mac** | `uvicorn` + `npm run dev` | No — `FORCE_CPU_SOLVER=1` |
 
-| Workload | Process | Port | Config |
-|----------|---------|------|--------|
-| LLM triage | llama.cpp Nemotron (`--n-gpu-layers 99`) | 30000 | `NIM_ENDPOINT=http://localhost:30000/v1` |
-| LLM fallback | Docker NIM Gemma 3n E4B | 8001 | `NIM_FALLBACK=http://localhost:8001/v1` |
-| KNN solver | RAPIDS container (cuDF + cuML) | 8000 | auto-detected at startup |
+Mac connects via Tailscale: `NIM_ENDPOINT=http://100.81.85.39:8001/v1` (replace with your unit IP).
 
-`docker compose up` starts Gemma NIM + RAPIDS backend. Nemotron via llama.cpp is started separately on the host (see full guide).
+Models download automatically on first NIM start (NGC); not stored on Mac.
 
-### Use UI from laptop
-
-```bash
-ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
-```
-
-Open http://localhost:3000/caseworker while services run on the GX10.
+Full steps: [`gx10_access_and_gpu_guide.md`](gx10_access_and_gpu_guide.md) Steps 3–4.

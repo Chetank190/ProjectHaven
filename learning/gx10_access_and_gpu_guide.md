@@ -1,333 +1,288 @@
 # GX10 Access + GPU Model Setup
 
-> **Start here** for SSH access, Tailscale, and wiring Haven Matrix to the GX10 GPU.
+> **Start here** for SSH, Tailscale, downloading/storing models on GPU, and connecting from your Mac.
 > Companion docs: `haven_matrix_reference.md` (day-of checklist), `haven_matrix_implementation.md` (full spec).
 
 ---
 
-## Your Unit — gx10-3cd8
+## Team architecture (default)
+
+```
+┌───────────────────────────── Mac (your laptop) ─────────────────────────────┐
+│  React frontend :3000                                                       │
+│  FastAPI backend :8000  (CPU — pandas/sklearn, FORCE_CPU_SOLVER=1)         │
+│       │ HTTP POST to GX10 over Tailscale                                    │
+└───────┼─────────────────────────────────────────────────────────────────────┘
+        │
+        ▼  Tailscale (e.g. 100.81.85.39)
+┌───────────────────────────── GX10 gx10-3cd8 ────────────────────────────────┐
+│  Docker NIM Gemma 3n :8001  ── GPU (model download + inference)            │
+│  Docker NIM Parakeet ASR :9000  ── GPU (optional)                          │
+│  NO backend container · NO frontend on GX10                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Where | What runs | GPU? |
+|-------|-----------|------|
+| **GX10** | `docker compose up nim` (+ optional `asr`) | **Yes** — models only |
+| **Mac** | `uvicorn` + `npm run dev` | No — CPU routing + UI |
+
+Model weights are **not** copied to your Mac. They download once on the GX10 into a Docker volume and stay there.
+
+---
+
+## Your unit — gx10-3cd8
 
 | Field | Value |
 |-------|-------|
-| Hotspot SSID | `gx10-3cd8` |
-| Hotspot Password | `gx10-3cd8` |
-| SSH System Name | `asus@gx10-3cd8.local` |
-| Username | `asus` |
-| Password | `password` |
+| Hotspot SSID / password | `gx10-3cd8` |
+| SSH (hotspot) | `ssh asus@gx10-3cd8.local` |
+| SSH (Tailscale) | `ssh asus@100.81.85.39` (check admin console for current IP) |
+| Username / password | `asus` / `password` |
+| Tailscale invite | https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11 |
 
-> **No pamphlet in the box?** Flip the unit over and read the **MAC1** sticker. Use the last 4 characters to complete the name. Example: MAC1 ending in `3C:D8` → `asus@gx10-3cd8.local`.
-
----
-
-## Important: No Wi-Fi on the GX10
-
-The GX10 has **no built-in Wi-Fi**. All initial remote access goes through a **mobile hotspot** → SSH. After Tailscale is set up, you can SSH from anywhere without the hotspot.
-
-Remote access info is also on the pamphlet in the box. One or two units at the event may lack a pamphlet — the credentials pattern is the same for all units.
+> **No pamphlet?** MAC1 sticker last 4 chars → `gx10-XXXX`.
 
 ---
 
-## Step 1 — SSH via Mobile Hotspot
+## Step 1 — SSH access
 
-### Connect your laptop to the hotspot
+**First time (hotspot):** connect Mac to `gx10-3cd8` → `ssh asus@gx10-3cd8.local`
 
-Turn on your phone's mobile hotspot **or** your laptop's hotspot. The GX10 will auto-connect to a saved hotspot profile.
+**Daily (Tailscale):** install/connect Tailscale on Mac (same tailnet as GX10) → `ssh asus@100.81.85.39`
 
-Connect **your laptop** to:
+Verify: `ping -c 2 100.81.85.39` should reply before SSH.
 
-| Field | Value (your unit) |
-|-------|-------------------|
-| SSID | `gx10-3cd8` |
-| Password | `gx10-3cd8` |
-
-### SSH in
-
-Open **Terminal** (Mac/Linux — preferred on Mac) or **PowerShell as Administrator** (Windows):
-
-```bash
-ssh asus@gx10-3cd8.local
-```
-
-When prompted:
-
-1. Type `yes` and press Enter (accepts the host key fingerprint)
-2. Password: `password` and press Enter
-
-You know it worked when you see the GX10 shell prompt.
-
-**Other units at the event** use the same pattern: `ssh asus@gx10-XXXX.local` where `XXXX` is the 4-character ID from the pamphlet or MAC1 sticker.
+See Steps 2–3 below for Tailscale setup details (hotspot pairing, team invite, venue Wi-Fi).
 
 ---
 
-## Step 2 — Tailscale (Persistent Remote Access)
+## Step 2 — Tailscale (persistent remote access)
 
-Use Tailscale so you can SSH into the GX10 from any network — venue Wi-Fi, home, etc. — without needing the hotspot.
+1. Install on Mac: https://tailscale.com/download (no `.edu` email)
+2. Menu bar → **Connected**
+3. On GX10 (once): `sudo tailscale up` → authorize URL in browser
+4. Admin → Machines → both **your Mac** and **gx10-3cd8** show Connected
 
-### Install Tailscale on your laptop first
-
-Download: **https://tailscale.com/download**
-
-- **Do NOT use a `.edu` email** — institutional emails block Tailscale registration on both devices
-- Use a personal Gmail, Outlook, or GitHub account
-
-**Mac:**
-
-- Allow all configuration prompts during install
-- A Tailscale icon appears in the menu bar — click it and make sure it is **enabled**
-- If the icon is hidden: remove some menu bar icons and it will reappear
-
-**Windows:**
-
-- Tailscale lives in the **hidden system tray** (bottom-right, click the ^ arrow)
-- Right-click the icon → Connect
-
-### Pair the GX10 (Tailscale is pre-installed on the unit)
-
-SSH into the GX10 first (Step 1), then run:
-
-```bash
-sudo tailscale up
-```
-
-This prints a URL. Copy it → paste in your **laptop browser** → authorize.
-
-The GX10 is now on your Tailscale network.
-
-### SSH via Tailscale (daily access)
-
-```bash
-# By hostname:
-ssh asus@gx10-3cd8
-
-# By Tailscale IP (starts with 100.):
-ssh asus@100.X.X.X
-# Find the IP in your Tailscale app under "Machines"
-```
-
-### Invite teammates
-
-**Team invite link (Project Haven):**
-
-https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
-
-Or via admin console:
-
-1. Open **Tailscale admin console** (tailscale.com → Admin Console)
-2. Click **Invite users** → **Invite by email**
-3. Teammate installs Tailscale → prompted to join a tailnet → **choose the Host email** (two emails may appear — pick the host's)
-4. Teammate can then SSH: `ssh asus@gx10-3cd8` or `ssh asus@100.X.X.X`
+Team invite: https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
 
 ---
 
-## Step 3 — Venue Wi-Fi Transition (Requires Monitor)
+## Step 3 — Download, store, and load models on GPU (GX10 only)
 
-The hotspot profile is **persistent** — the GX10 reconnects to it on every reboot.
+Run these **on the GX10** via SSH. Do **not** run backend or frontend here.
 
-To switch to venue Wi-Fi:
+### What gets downloaded and where
 
-1. Connect a **monitor** to the GX10
-2. Turn off the hotspot connection and pair with venue Wi-Fi on the GX10 directly
-3. Delete the saved hotspot profile so it does not reconnect on reboot:
+| Model | How it installs | Where it is stored | Port |
+|-------|-----------------|-------------------|------|
+| **Gemma 3n E4B** (LLM) | NIM container pulls from NGC on first start | Docker volume `nim-cache` → `/opt/nim/.cache` in container | **8001** |
+| **Parakeet ASR** (optional) | Same pattern | Docker volume `asr-cache` | **9000** |
 
-```bash
-nmcli con show                         # list all saved connections
-nmcli con delete gx10-3cd8-Hotspot     # permanent — use your unit's hotspot name
-```
+You do **not** manually `huggingface-cli download` for Gemma — the NIM container handles it when `NGC_API_KEY` is set.
 
-After deletion, the GX10 only connects to saved Wi-Fi networks.
-
----
-
-## Step 4 — Connect the LLM Model to GPU
-
-Haven Matrix uses the GX10 GPU in **two separate processes**. Both must run for full demo mode (`compile_method: nim` + `rapids_mode: gpu`).
-
-| Layer | Process | Port | Env var |
-|-------|---------|------|---------|
-| **LLM triage** (primary) | llama.cpp Nemotron (`--n-gpu-layers 99`) | 30000 | `NIM_ENDPOINT=http://localhost:30000/v1` |
-| **LLM triage** (fallback) | Docker NIM Gemma 3n E4B | 8001 | `NIM_FALLBACK=http://localhost:8001/v1` |
-| **KNN solver** | RAPIDS container (cuDF + cuML) | 8000 | auto-detected at startup |
-
-**LLM retry chain:** cloud NIM (if `NGC_API_KEY`) → Nemotron :30000 → Gemma NIM :8001 → regex.
-
-### 4a — Verify hardware
+### 3a — Clone repo and set NGC key (on GX10)
 
 ```bash
-nvidia-smi && uname -m
-# Must show GB10 GPU and aarch64
+cd ~
+git clone https://github.com/Chetank190/ProjectHaven.git   # or your fork
+cd ProjectHaven
+cp .env.example .env
+nano .env   # set NGC_API_KEY from build.nvidia.com → API Keys
 ```
 
-### 4b — Download Nemotron weights (~38 GB)
+GX10 `.env` only needs:
 
 ```bash
-pip install huggingface-hub
-huggingface-cli download ggml-org/NVIDIA-Nemotron-3-Nano-Omni \
-  nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf \
-  --local-dir ~/models/nemotron
+NGC_API_KEY=nvapi-xxxxxxxx
 ```
 
-### 4c — Build llama.cpp with CUDA (one-time, ~15–20 min)
-
-```bash
-git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
-cd ~/llama.cpp
-cmake -B build -DGGML_CUDA=ON
-cmake --build build -j$(nproc)
-```
-
-### 4d — Start Nemotron on GPU (keep this terminal open)
-
-```bash
-~/llama.cpp/build/bin/llama-server \
-  --model ~/models/nemotron/nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf \
-  --host 0.0.0.0 \
-  --port 30000 \
-  --n-gpu-layers 99 \
-  --ctx-size 8192 \
-  --threads 8
-```
-
-Test it:
-
-```bash
-curl http://localhost:30000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"nemotron","messages":[{"role":"user","content":"Reply with exactly: {\"test\":true}"}]}'
-```
-
-### 4e — Start RAPIDS backend (GPU KNN)
-
-**Option A — Docker Compose (recommended):**
+### 3b — Start LLM on GPU (required)
 
 ```bash
 cd ~/ProjectHaven
-# Set NGC_API_KEY in .env first if using cloud NIM tier
-docker compose up
+docker compose up nim -d
+docker compose logs -f nim    # first run: 10–30+ min pull + load
 ```
 
-This starts Gemma 3n NIM on :8001 and FastAPI + RAPIDS on :8000.
+**Do not** run `docker compose up` (full stack) if backend/frontend live on Mac — that starts an extra backend container on the GX10 you don't need.
 
-**Option B — Manual RAPIDS container:**
+### 3c — Optional ASR on GPU
 
 ```bash
-cd ~/ProjectHaven
-docker pull rapidsai/base:25.06-cuda12-py3.12
-docker run --gpus all --network host -v $(pwd):/app -w /app \
-  -it rapidsai/base:25.06-cuda12-py3.12 bash
+docker compose up asr -d
+docker compose logs -f asr
+```
 
-# Inside container:
-pip install -r backend/requirements.txt -q
-python3 -c "import cudf, cuml; print('RAPIDS OK')"
-python3 backend/data_ingestion.py --verify --mode gpu
-python3 backend/solver.py --benchmark
+### 3d — Verify model on GPU (on GX10)
+
+```bash
+# LLM API up
+curl -s http://localhost:8001/v1/models | head
+
+# GPU memory in use
+nvidia-smi
+
+# Container status
+docker compose ps
+```
+
+Success: `nim` is **Up**, curl returns model JSON, `nvidia-smi` shows VRAM used by docker/NIM.
+
+### 3e — Persist across reboots
+
+Models stay in Docker volumes (`nim-cache`, `asr-cache`). After reboot on GX10:
+
+```bash
+cd ~/ProjectHaven && docker compose up nim -d
+# optional: docker compose up asr -d
+```
+
+No re-download unless you `docker volume rm nim-cache`.
+
+---
+
+## Step 4 — Connect Mac backend to GX10 models
+
+Run on **your Mac** in the project folder.
+
+### 4a — Mac `.env`
+
+```bash
+cd ~/Desktop/ProjectHaven   # your local path
+cp .env.example .env
+```
+
+Edit `.env` — use your GX10 Tailscale IP from admin console:
+
+```bash
+GX10_TAILSCALE_IP=100.81.85.39
+FORCE_CPU_SOLVER=1
+NIM_ENDPOINT=http://100.81.85.39:8001/v1
+NIM_FALLBACK=http://100.81.85.39:8001/v1
+ASR_NIM_URL=http://100.81.85.39:9000
+NGC_API_KEY=your_ngc_key_here    # optional cloud fallback tier
+NIM_API_KEY=not-needed
+```
+
+**Alternative (SSH tunnel):** if `:8001` is blocked, in a separate terminal:
+
+```bash
+ssh -L 8001:localhost:8001 -L 9000:localhost:9000 asus@100.81.85.39
+```
+
+Then set `NIM_ENDPOINT=http://localhost:8001/v1` in Mac `.env`.
+
+### 4b — Start backend on Mac
+
+```bash
+source .vhaven/bin/activate
+pip install -r backend/requirements.txt
+python backend/data_ingestion.py --verify --mode cpu
+
+# Load .env into shell (backend reads os.environ, not .env file directly)
+set -a && source .env && set +a
+
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 4f — Start frontend (host OS, new terminal)
+### 4c — Start frontend on Mac
+
+Second terminal:
 
 ```bash
-cd ~/ProjectHaven/frontend && npm install && npm run dev
+cd frontend && npm install && npm run dev
 ```
 
-### 4g — Verify everything
+Open http://localhost:3000/caseworker
+
+### 4d — Verify connection (on Mac)
 
 ```bash
-curl http://localhost:8000/api/v1/health
-# Expect: "rapids_mode": "gpu", 7 datasets loaded
+# Backend healthy, CPU routing
+curl -s http://localhost:8000/api/v1/health | python3 -m json.tool
+# "rapids_mode": "cpu"
 
-curl -X POST http://localhost:8000/api/v1/caseworker/route \
+# Can reach GX10 model directly
+curl -s http://100.81.85.39:8001/v1/models | head
+
+# App uses GPU model (not regex)
+curl -s -X POST http://localhost:8000/api/v1/caseworker/route \
   -H "Content-Type: application/json" \
-  -d '{"text": "need shelter and food, no ID, been drinking"}'
-# Expect: "compile_method": "nim", itinerary with results
-
-curl http://localhost:8000/api/v1/benchmark
-# Expect: last_gpu_ms < 10, speedup > 10
+  -d '{"text": "need shelter and food, no ID"}' | python3 -m json.tool
+# "compile_method": "nim"
 ```
+
+UI: after routing, badge shows **`NIM`** not **`REGEX`**.
 
 ---
 
-## Step 5 — Use the UI from Your Laptop (SSH Port Forwarding)
+## Step 5 — Copy files between Mac and GX10
 
-Services run on the GX10. To open the browser on your laptop:
+**Mac ← GX10:**
 
 ```bash
-ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
+scp asus@100.81.85.39:~/ProjectHaven/logs/*.log ~/Desktop/
 ```
 
-Then on your laptop:
-
-- Caseworker: http://localhost:3000/caseworker
-- Kiosk: http://localhost:3000/kiosk
-- Swagger: http://localhost:8000/docs
-
----
-
-## Fallback — If Nemotron Download Is Too Slow
-
-Use the NIM container only (zero code change):
+**Mac → GX10:**
 
 ```bash
-cd ~/ProjectHaven
-echo "NIM_ENDPOINT=http://localhost:8001/v1" >> .env
-echo "NIM_FALLBACK=http://localhost:8001/v1" >> .env
-docker compose up
+scp .env asus@100.81.85.39:~/ProjectHaven/.env
+rsync -avz --exclude node_modules --exclude .vhaven ./ asus@100.81.85.39:~/ProjectHaven/
 ```
 
-Or start NIM manually:
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `compile_method: "regex"` | GX10 NIM down or Mac can't reach `:8001` — check `curl http://GX10_IP:8001/v1/models` |
+| `docker compose logs nim` auth error | Fix `NGC_API_KEY` in GX10 `.env` |
+| SSH timeout | Tailscale not Connected on Mac — `tailscale status` |
+| `rapids_mode: "gpu"` unexpected | Set `FORCE_CPU_SOLVER=1` on Mac |
+| Ran `docker compose up` on GX10 | Stop extra services: `docker compose stop backend asr` — keep `nim` only |
+
+---
+
+## Venue Wi-Fi + delete hotspot
+
+Requires monitor on GX10. After pairing venue Wi-Fi:
 
 ```bash
-docker run --gpus all --network host \
-  -e NGC_API_KEY=$NGC_API_KEY \
-  -v nim-cache:/opt/nim/.cache \
-  -p 8001:8000 \
-  nvcr.io/nim/google/gemma-3n-e4b-it:latest
+nmcli con show
+nmcli con delete gx10-3cd8-Hotspot
 ```
 
 ---
 
-## Terminal Layout (Day-of Demo)
-
-| Terminal | What it runs |
-|----------|-------------|
-| 1 | `watch -n 1 nvidia-smi` — GPU usage visible during demo |
-| 2 | llama.cpp Nemotron server (port 30000) |
-| 3 | RAPIDS container → uvicorn FastAPI (port 8000) |
-| 4 | React frontend (port 3000) |
-| 5 (laptop) | SSH port-forward OR direct browser on GX10 monitor |
-
----
-
-## Quick Reference Card
+## Quick reference
 
 ```
-YOUR UNIT (gx10-3cd8):
-  Hotspot SSID/Password:  gx10-3cd8
-  SSH:                    ssh asus@gx10-3cd8.local
-  Username / Password:    asus / password
+GX10 (models only):
+  cd ~/ProjectHaven && cp .env.example .env  # NGC_API_KEY
+  docker compose up nim -d
+  curl http://localhost:8001/v1/models && nvidia-smi
 
-INITIAL ACCESS:
-  Connect laptop to hotspot → ssh asus@gx10-3cd8.local → yes → password
+MAC (backend + frontend):
+  .env → NIM_ENDPOINT=http://100.81.85.39:8001/v1, FORCE_CPU_SOLVER=1
+  uvicorn backend.main:app --port 8000 --reload
+  cd frontend && npm run dev
 
-TAILSCALE SETUP (once):
-  Install on laptop → SSH in → sudo tailscale up → authorize URL
-  Team invite: https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
-
-DAILY REMOTE ACCESS:
-  ssh asus@gx10-3cd8  (or ssh asus@100.X.X.X via Tailscale)
-
-USE UI FROM LAPTOP:
-  ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
-
-GPU MODEL (LLM):
-  llama-server --n-gpu-layers 99 --port 30000  →  NIM_ENDPOINT
-
-GPU SOLVER (KNN):
-  docker compose up  OR  RAPIDS container  →  rapids_mode: gpu
-
-DELETE HOTSPOT (after venue Wi-Fi):
-  nmcli con delete gx10-3cd8-Hotspot
+VERIFY:
+  health → rapids_mode: cpu
+  route  → compile_method: nim
 ```
 
 ---
 
-*Last updated: May 30, 2026 — official pamphlet SSH/Tailscale + GPU model wiring for gx10-3cd8*
+## Appendix — Optional: Nemotron or full GPU KNN
+
+**Nemotron (manual download to `~/models/nemotron`, llama.cpp :30000):** see README § Option B.
+
+**RAPIDS GPU KNN (`FORCE_CPU_SOLVER=0`):** not used in Mac+GX10 split; see README appendix only if benchmarking on-box.
+
+---
+
+*Last updated: May 30, 2026 — Mac backend/frontend + GX10 GPU models only*

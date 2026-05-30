@@ -46,6 +46,17 @@ NIM_MODEL       = "google/gemma-3n-e4b-it"
 NIM_TIMEOUT_SEC = 15
 NIM_MAX_RETRIES = 2
 
+# When true, skip cuDF/cuML — reserve GPU for LLM only (Gemma NIM / llama.cpp)
+FORCE_CPU_SOLVER = os.environ.get("FORCE_CPU_SOLVER", "0").lower() in ("1", "true", "yes")
+
+# ── ASR NIM (Parakeet-0.6B-CTC) ───────────────────────────────────────────────
+# Tier 1 — local NIM container on GX10 GPU (port 9000)
+ASR_NIM_URL     = os.environ.get("ASR_NIM_URL",   "http://localhost:9000")
+# Tier 2 — NVIDIA cloud ASR (requires NGC_API_KEY; audio leaves device)
+ASR_CLOUD_URL   = os.environ.get("ASR_CLOUD_URL", "https://integrate.api.nvidia.com/v1")
+# Tier 3 — Web Speech API fallback (handled in browser; backend raises 503)
+ASR_NIM_TIMEOUT = 30   # seconds — audio transcription is slower than text
+
 # ── Toronto CKAN ──────────────────────────────────────────────────────────────
 SHELTER_CKAN_URL = (
     "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search"
@@ -95,6 +106,11 @@ NIM_TRIAGE_PROMPT = """You are a deterministic JSON compiler for a social servic
 
 Your ONLY job is to read input (caseworker notes or a person's spoken words) and output a
 single valid JSON object. Output NOTHING else — no explanation, no markdown, no preamble.
+
+PRIVACY RULE: Input may contain residual personal identifiers (names, addresses, health
+conditions, medication names). Ignore all personal information completely. Focus ONLY on
+the service needs described. Your JSON output must never contain names, contact details,
+health diagnoses, or any other personal information.
 
 JSON schema (all fields required):
 {
