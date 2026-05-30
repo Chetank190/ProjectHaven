@@ -130,7 +130,7 @@ export function CaseworkerPage() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-3xl mx-auto w-full px-4 py-6 space-y-4">
+      <main className="flex-1 max-w-3xl mx-auto w-full px-4 py-6 pb-36 space-y-4">
         <ShiftBriefing />
 
         {error && (

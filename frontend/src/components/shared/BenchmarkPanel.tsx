@@ -16,7 +16,7 @@ export function BenchmarkPanel() {
   const fmt = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)} ms`);
 
   return (
-    <div className="fixed bottom-4 right-4 rounded-xl shadow-2xl z-50 overflow-hidden min-w-44"
+    <div className="fixed bottom-5 right-5 rounded-xl shadow-2xl z-50 overflow-hidden min-w-40"
       style={{ background: 'linear-gradient(135deg, #0A2A3D, #1A3D52)', border: '1px solid rgba(26,147,187,0.3)' }}>
       <div className="px-3 py-1.5 text-center"
         style={{ background: 'rgba(26,147,187,0.15)', borderBottom: '1px solid rgba(56,174,210,0.2)' }}>
