@@ -5,6 +5,7 @@ Three call types: triage (JSON), briefing (text), handoff script (text).
 Regex fallback for triage when LLM is offline.
 """
 
+import os
 import re
 import json
 import time
@@ -68,7 +69,7 @@ def generate_briefing(shelter_summary: str) -> str:
     """Summarize morning shelter data into plain-English shift briefing."""
     for endpoint in [NIM_ENDPOINT, NIM_FALLBACK]:
         try:
-            client = OpenAI(base_url=endpoint, api_key="not-needed")
+            client = OpenAI(base_url=endpoint, api_key=os.environ.get("NIM_API_KEY", "not-needed"))
             resp = client.chat.completions.create(
                 model=NIM_MODEL,
                 messages=[
@@ -99,7 +100,7 @@ def generate_handoff_script(facility_name: str, payload: NeedsPayload) -> str:
     )
     for endpoint in [NIM_ENDPOINT, NIM_FALLBACK]:
         try:
-            client = OpenAI(base_url=endpoint, api_key="not-needed")
+            client = OpenAI(base_url=endpoint, api_key=os.environ.get("NIM_API_KEY", "not-needed"))
             resp = client.chat.completions.create(
                 model=NIM_MODEL,
                 messages=[
@@ -127,7 +128,7 @@ def kiosk_voice_payload(needs_transcript: str, eligibility_answers: dict) -> Nee
 
 def _call_nim(text: str, endpoint: str, system_prompt: str) -> dict:
     """Call NIM/llama.cpp endpoint and parse JSON response."""
-    client = OpenAI(base_url=endpoint, api_key="not-needed")
+    client = OpenAI(base_url=endpoint, api_key=os.environ.get("NIM_API_KEY", "not-needed"))
     resp = client.chat.completions.create(
         model=NIM_MODEL,
         messages=[

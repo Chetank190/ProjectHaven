@@ -11,3 +11,24 @@ dist/
 *.log
 .venv/
 venv/
+
+# Claude Code
+CLAUDE.md
+.claude/
+learning/
+
+# Python extras
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Frontend extras
+frontend/.vite
+frontend/.env
+frontend/.env.local
+
+# IDE
+.idea/
+.vscode/

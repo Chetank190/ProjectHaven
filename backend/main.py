@@ -5,6 +5,7 @@ Launch: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import EngineMode, KIOSK_HUBS
 from data_ingestion import load_all
@@ -33,6 +34,7 @@ from voice_session import (
     parse_eligibility_answer,
     clean_transcript,
     build_tts_itinerary_script,
+    _cleanup_expired,
 )
 
 # ── Global state ──────────────────────────────────────────────────────────────
@@ -58,7 +60,15 @@ async def lifespan(app: FastAPI):
 
     datasets_cpu, _ = load_all(EngineMode.CPU)
     print(f"[READY] rapids_mode={_rapids_mode}")
+
+    async def _session_gc():
+        while True:
+            await asyncio.sleep(60)
+            _cleanup_expired()
+
+    gc_task = asyncio.create_task(_session_gc())
     yield
+    gc_task.cancel()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -72,26 +82,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 
 # ── Request models ────────────────────────────────────────────────────────────
 class CaseworkerRouteRequest(BaseModel):
     text:        str
-    origin_lat:  float = 43.6532
-    origin_lon:  float = -79.3832
+    origin_lat:  float = Field(43.6532, ge=-90, le=90)
+    origin_lon:  float = Field(-79.3832, ge=-180, le=180)
     client_name: str | None = None
 
 
 class KioskSessionRequest(BaseModel):
     transcript: str
-    origin_lat: float
-    origin_lon: float
+    origin_lat: float = Field(..., ge=-90, le=90)
+    origin_lon: float = Field(..., ge=-180, le=180)
 
 
 class KioskRouteRequest(BaseModel):

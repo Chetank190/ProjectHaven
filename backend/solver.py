@@ -62,39 +62,6 @@ def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:
     """Return dict of pillar_name → filtered DataFrame based on eligibility constraints."""
     masked = {}
 
-    def eligibility_mask(df):
-        m = [True] * len(df)
-        try:
-            if payload.has_id is False and "requires_id" in df.columns:
-                m = df["requires_id"].astype(bool) == False
-            else:
-                import pandas as _pd
-                m = _pd.Series([True] * len(df), index=df.index)
-                if payload.has_id is False and "requires_id" in df.columns:
-                    m = m & (df["requires_id"].astype(bool) == False)
-                if payload.sobriety_status == "using" and "harm_reduction" in df.columns:
-                    m = m & (df["harm_reduction"].astype(bool) == True)
-                return m
-        except Exception:
-            pass
-        # Fallback: build mask as pandas Series
-        import pandas as _pd
-        m = _pd.Series([True] * len(df))
-        if hasattr(df, "to_pandas"):
-            pdf = df.to_pandas()
-            m = _pd.Series([True] * len(pdf))
-            if payload.has_id is False and "requires_id" in pdf.columns:
-                m = m & (pdf["requires_id"].astype(bool) == False)
-            if payload.sobriety_status == "using" and "harm_reduction" in pdf.columns:
-                m = m & (pdf["harm_reduction"].astype(bool) == True)
-            # Convert back to cuDF boolean index if needed
-            try:
-                import cudf
-                return cudf.Series(m.values)
-            except Exception:
-                return m
-        return m
-
     def elig(df):
         """Simplified eligibility mask that works for both pandas and cuDF."""
         try:

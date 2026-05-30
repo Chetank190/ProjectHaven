@@ -122,8 +122,12 @@ def _load_osm(pd_engine):
     """Read osm_amenities.json and normalize to flat DataFrame."""
     import pandas as pd
 
-    with open(OSM_JSON) as f:
-        raw = json.load(f)
+    try:
+        with open(OSM_JSON) as f:
+            raw = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"[WARN] OSM JSON load failed ({e}), using empty list")
+        raw = {"elements": []}
 
     rows = []
     for el in raw.get("elements", []):
