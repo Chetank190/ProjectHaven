@@ -231,10 +231,10 @@ Expected: JSON with `compile_method: "regex"`, `itinerary` with shelter + food s
 
 **Quick SSH** (do this first, before any other step):
 ```bash
-# Enable mobile hotspot on your phone or laptop
-# Then from Terminal / PowerShell Admin:
-ssh asus@gx10-XXXX.local   # XXXX = last 4 chars of MAC1 sticker under the unit
-# password: password
+# 1. Connect your laptop to hotspot SSID: gx10-3cd8  (password: gx10-3cd8)
+# 2. Open Terminal / PowerShell Admin:
+ssh asus@gx10-3cd8.local
+# When prompted: type yes → then password: password
 ```
 
 **Do these in parallel once SSH'd in. Some steps take 30-60 minutes.**
@@ -663,31 +663,36 @@ lsof -ti :8000 | xargs kill -9
 
 > The GX10 has **no built-in Wi-Fi**. All remote access goes through mobile hotspot → SSH, then optionally Tailscale for persistent access across any network.
 
+### Your Unit's Credentials
+
+```
+Hotspot SSID:     gx10-3cd8
+Hotspot Password: gx10-3cd8
+SSH command:      ssh asus@gx10-3cd8.local
+Username:         asus
+Password:         password
+```
+
 ---
 
 ### Method A — SSH via Mobile Hotspot (fastest, same-network only)
 
-**Step 1 — Enable your hotspot**
+**Step 1 — Connect your laptop to the GX10 hotspot**
 
 Turn on mobile hotspot on your phone **or** on your laptop (either works). The GX10 will auto-connect — the hotspot profile is pre-saved on the unit.
 
-**Step 2 — Find your unit's SSH name**
+**Connect your laptop to:**
+| Field | Value |
+|-------|-------|
+| Hotspot SSID | `gx10-3cd8` |
+| Hotspot Password | `gx10-3cd8` |
 
-Look at the pamphlet in the box:
-- SSH name format: `gx10-XXXX` where XXXX is unique per unit
-
-**No pamphlet?** Flip the unit upside down → find the sticker labelled `MAC1` → use the **last 4 characters** of that address.
-
-Example: MAC1 = `AA:BB:CC:DD:3H:D6` → SSH name = `gx10-3hd6`
-
-**Step 3 — SSH in**
+**Step 2 — SSH in**
 
 Open Terminal (Mac/Linux) or PowerShell as Administrator (Windows):
 
 ```bash
-ssh asus@gx10-XXXX.local
-# Replace XXXX with your unit's 4-character ID
-# Example: ssh asus@gx10-3hd6.local
+ssh asus@gx10-3cd8.local
 ```
 
 When prompted:
@@ -701,8 +706,10 @@ You'll see the GX10 shell prompt when it works.
 |-------|-------|
 | Username | `asus` |
 | Password | `password` |
-| Hostname | `gx10-XXXX.local` |
-| SSH System Name | `asus@gx10-XXXX` |
+| Hostname | `gx10-3cd8.local` |
+| SSH System Name | `asus@gx10-3cd8` |
+
+> **Other units at the event** use the same pattern (`gx10-XXXX`) but with their own 4-character ID. If no pamphlet is in the box, flip the unit upside down → read the `MAC1` sticker → use the last 4 characters. Example: MAC1 ending in `3C:D8` → SSH name `gx10-3cd8`.
 
 ---
 
@@ -742,7 +749,7 @@ The GX10 is now in your Tailscale network.
 
 ```bash
 # By hostname:
-ssh asus@gx10-XXXX
+ssh asus@gx10-3cd8
 
 # By Tailscale IP (starts with 100.):
 ssh asus@100.X.X.X
@@ -758,7 +765,7 @@ So others can SSH in without needing the same hotspot:
 1. Open the **Tailscale admin console** (tailscale.com → Admin Console)
 2. Click **Invite users** → **Invite by email**
 3. Teammate receives an email → installs Tailscale → prompted to join two tailnets → **choose your (the host's) email**
-4. Teammate can now SSH using: `ssh asus@gx10-XXXX` or `ssh asus@100.X.X.X`
+4. Teammate can now SSH using: `ssh asus@gx10-3cd8` or `ssh asus@100.X.X.X`
 
 ---
 
@@ -768,7 +775,7 @@ The hotspot profile is persistent — the GX10 will keep reconnecting to it on e
 
 ```bash
 nmcli con show                         # lists all saved connections
-nmcli con delete gx10-XXXX-Hotspot    # replace XXXX with your unit's ID
+nmcli con delete gx10-3cd8-Hotspot
 ```
 
 This is permanent. After deletion, the GX10 will only connect to saved Wi-Fi networks.
@@ -778,20 +785,25 @@ This is permanent. After deletion, the GX10 will only connect to saved Wi-Fi net
 ### Quick reference card
 
 ```
+YOUR UNIT:
+  Hotspot SSID/Password: gx10-3cd8
+  SSH:                   ssh asus@gx10-3cd8.local
+  Username / Password:   asus / password
+
 INITIAL ACCESS:
-  Enable hotspot → ssh asus@gx10-XXXX.local → yes → password
+  Connect laptop to hotspot gx10-3cd8 → ssh asus@gx10-3cd8.local → yes → password
 
 TAILSCALE SETUP (once):
   SSH in → sudo tailscale up → authorize URL in browser
 
 DAILY REMOTE ACCESS (after Tailscale):
-  ssh asus@gx10-XXXX  (or ssh asus@100.X.X.X)
+  ssh asus@gx10-3cd8  (or ssh asus@100.X.X.X)
 
 INVITE TEAMMATE:
   Tailscale admin → Invite by email → teammate joins your tailnet
 
 DELETE HOTSPOT (cleanup):
-  nmcli con delete gx10-XXXX-Hotspot
+  nmcli con delete gx10-3cd8-Hotspot
 ```
 
 ---

@@ -52,21 +52,25 @@ The GX10 has **no Wi-Fi**. Connect via your **mobile hotspot** then SSH in.
 
 ### Step 1 — SSH over mobile hotspot
 
-Enable your phone/laptop hotspot. The GX10 auto-connects to it.
+Enable your mobile hotspot. The GX10 auto-connects to it.
+
+**Hotspot credentials (connect your laptop to this network first):**
+| Field | Value |
+|-------|-------|
+| Hotspot SSID | `gx10-3cd8` |
+| Hotspot Password | `gx10-3cd8` |
 
 Open Terminal (Mac/Linux) or PowerShell as Admin (Windows):
 
 ```bash
-ssh asus@gx10-XXXX.local
-# Replace XXXX with the last 4 chars of the MAC1 sticker under the unit
-# Example: ssh asus@gx10-3hd6.local
+ssh asus@gx10-3cd8.local
 ```
 
 When prompted:
 - Type `yes` and press Enter
 - Password: `password`
 
-**No pamphlet?** Flip the unit over → look at the `MAC1` label → use the last 4 characters.
+> Other units at the event use the same format (`gx10-XXXX.local`) but with their own 4-character ID from the MAC1 sticker under the unit.
 
 ---
 
@@ -87,7 +91,7 @@ sudo tailscale up
 After pairing, SSH via Tailscale from anywhere:
 
 ```bash
-ssh asus@gx10-XXXX          # by hostname
+ssh asus@gx10-3cd8          # by hostname
 ssh asus@100.X.X.X          # by Tailscale IP (shown in Tailscale app)
 ```
 
@@ -101,7 +105,7 @@ ssh asus@100.X.X.X          # by Tailscale IP (shown in Tailscale app)
 
 ```bash
 nmcli con show                        # list all connections
-nmcli con delete gx10-XXXX-Hotspot   # delete so it doesn't reconnect on reboot
+nmcli con delete gx10-3cd8-Hotspot   # delete so it doesn't reconnect on reboot
 ```
 
 ---
