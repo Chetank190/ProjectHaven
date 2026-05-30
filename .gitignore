@@ -11,6 +11,7 @@ dist/
 *.log
 .venv/
 venv/
+.vhaven/
 
 # Logs
 logs/
