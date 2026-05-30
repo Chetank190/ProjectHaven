@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from config import EngineMode, KIOSK_HUBS
+from config import EngineMode, KIOSK_HUBS, NIM_ENDPOINT
 from data_ingestion import load_all
 from nim_compiler import (
     NeedsPayload,
@@ -126,7 +126,7 @@ async def health():
     return {
         "status":        "ok",
         "rapids_mode":   _rapids_mode,
-        "nim_endpoint":  "http://localhost:30000/v1",
+        "nim_endpoint":  NIM_ENDPOINT,
         "datasets":      {k: len(v) for k, v in datasets_gpu.items()},
         "total_records": sum(len(v) for v in datasets_gpu.values()),
     }
@@ -199,7 +199,7 @@ async def kiosk_session(req: KioskSessionRequest):
 @app.post("/api/v1/kiosk/route")
 async def kiosk_route(req: KioskRouteRequest):
     session = get_session(req.session_id)
-    if not session:
+    if not session or session.payload_draft is None:
         raise HTTPException(status_code=404, detail="Session expired or not found")
 
     draft = session.payload_draft.model_dump()

@@ -158,8 +158,8 @@ def build_tts_itinerary_script(itinerary: dict, client_name: str | None = None) 
         walk = int(r.get("distance_walk_min", 0))
         transit = "There's a TTC stop nearby." if r.get("transit_accessible") else ""
 
-        line = f"Stop {i}: {r['name']}, for {pillar}. "
-        line += f"About a {walk} minute walk, at {r['address']}. {transit}"
+        line = f"Stop {i}: {r.get('name', 'Unknown facility')}, for {pillar}. "
+        line += f"About a {walk} minute walk, at {r.get('address', 'address unavailable')}. {transit}"
 
         if r.get("intake_preparation"):
             line += f" When you arrive: {r['intake_preparation']}"

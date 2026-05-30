@@ -94,7 +94,7 @@ export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
     if (flowState === 'waiting_for_answer' && transcript.length > 3) {
       advanceOrComplete(idx, transcript);
     }
-  }, [transcript]);
+  }, [transcript, idx, flowState]);
 
   const orbState = flowState === 'speaking_question' ? 'speaking'
     : flowState === 'waiting_for_answer' ? 'listening'

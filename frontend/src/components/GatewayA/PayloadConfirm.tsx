@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { NeedsPayload } from '../../types/api';
 
 interface Props {
@@ -19,9 +19,13 @@ const SECTORS = ['any', 'adult', 'youth', 'family'] as const;
 export function PayloadConfirm({ payload, onConfirm }: Props) {
   const [draft,     setDraft]     = useState<NeedsPayload>({ ...payload });
   const [countdown, setCountdown] = useState(5);
+  const submitted                 = useRef(false);
 
   useEffect(() => {
-    if (countdown <= 0) { onConfirm(draft); return; }
+    if (countdown <= 0) {
+      if (!submitted.current) { submitted.current = true; onConfirm(draft); }
+      return;
+    }
     const id = setTimeout(() => setCountdown(c => c - 1), 1000);
     return () => clearTimeout(id);
   }, [countdown]);

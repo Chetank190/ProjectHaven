@@ -186,7 +186,7 @@ def _check_transit(lat: float, lon: float, stops_df) -> bool:
     """Bounding-box transit proximity check (fast approximation — no haversine)."""
     try:
         lat_deg = TRANSIT_RADIUS_M / 111_000
-        lon_deg = TRANSIT_RADIUS_M / 73_000
+        lon_deg = TRANSIT_RADIUS_M / 80_000
         nearby = stops_df[
             (abs(stops_df["lat"] - lat) < lat_deg) &
             (abs(stops_df["lon"] - lon) < lon_deg)

@@ -145,7 +145,7 @@ def _load_osm(pd_engine):
     df["harm_reduction"]    = True
     df["bypass_pathway"]    = ""
     df["intake_preparation"] = ""
-    df["occupancy_ratio"]   = 0.0
+    df["occupancy_ratio"]   = 0.5
     df["phone"]             = ""
     df["hours"]             = "Open to public"
 

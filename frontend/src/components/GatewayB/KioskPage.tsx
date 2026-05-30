@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../../api/client';
-import { KIOSK_HUBS, KIOSK_DEFAULT_HUB, VOICE_SESSION_IDLE_MS } from '../../config';
+import { KIOSK_HUBS, KIOSK_DEFAULT_HUB, VOICE_SESSION_IDLE_MS, VOICE_MIN_CHARS } from '../../config';
 import type { KioskSessionResponse, KioskRouteResponse } from '../../types/api';
 import { useSpeech }       from '../shared/useSpeech';
 import { VoiceOrb }        from './VoiceOrb';
@@ -61,7 +61,7 @@ export function KioskPage() {
     setKioskState('processing');
 
     const captured = transcript;
-    if (!captured || captured.trim().length < 5) {
+    if (!captured || captured.trim().length < VOICE_MIN_CHARS) {
       speak("I didn't hear anything. Hold the orb and try again.", () => setKioskState('idle'));
       return;
     }
@@ -80,7 +80,9 @@ export function KioskPage() {
         await submitRoute(r.data.session_id, {});
       }
     } catch {
-      speak("Something went wrong. Please try again.", () => setKioskState('idle'));
+      const msg = "Something went wrong. Please try again.";
+      setError(msg);
+      speak(msg, () => { setError(null); setKioskState('idle'); });
     }
   };
 
@@ -91,10 +93,13 @@ export function KioskPage() {
         session_id:          sid,
         eligibility_answers: answers,
       });
+      setError(null);
       setRouteResult(r.data);
       setKioskState('speaking');
     } catch {
-      speak("I couldn't find your route. Please call 211 for help.", () => setKioskState('idle'));
+      const msg = "I couldn't find your route. Please call 211 for help.";
+      setError(msg);
+      speak(msg, () => { setError(null); setKioskState('idle'); });
     }
   };
 
