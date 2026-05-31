@@ -1,13 +1,16 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSpeech } from '../shared/useSpeech';
 import { VoiceOrb }  from './VoiceOrb';
+import { MuteButton } from '../shared/MuteButton';
 import { VOICE_ELIGIBILITY_WAIT_SEC } from '../../config';
 import { cLog, cWarn } from '../../lib/clientLog';
 
 interface Props {
   questions:  string[];
+  heardText?: string;
   onComplete: (answers: Record<string, boolean | string | null>) => void;
   onSkip:     () => void;
+  onType:     () => void;
 }
 
 type FlowState = 'speaking_question' | 'waiting_for_answer' | 'complete';
@@ -60,22 +63,22 @@ function parseAnswer(question: string, answer: string): { key: string; value: st
   return { key: 'unknown', value: null };
 }
 
-export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
+export function EligibilityFlow({ questions, heardText, onComplete, onSkip, onType }: Props) {
   const {
-    speak, startListening, stopListening,
+    speak, startListening, stopListening, stopSpeaking,
     transcript, transcriptFinal, clearTranscript,
-    isListening,
+    muted, toggleMute,
   } = useSpeech();
 
   const [idx,       setIdx]       = useState(0);
   const [flowState, setFlowState] = useState<FlowState>('speaking_question');
   const answers     = useRef<Record<string, boolean | string | null>>({});
+  // Abandonment guard — fires only after the user has been inactive (no speech,
+  // no tap) for VOICE_ELIGIBILITY_WAIT_SEC. Re-armed on every transcript change.
   const timeoutRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef  = useRef(true);
-  // Prevents double-advance from the transcriptFinal effect + isListening effect firing together
+  // Guards against the inactivity guard and a tap firing together.
   const didAdvanceRef   = useRef(false);
-  // Tracks whether listening actually started for the current question
-  const wasListeningRef = useRef(false);
 
   const advanceOrComplete = (i: number, answer: string | null, trigger = 'unknown') => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -95,7 +98,7 @@ export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
       raw:       answer ?? '(none)',
       parsed_key:   parsed.key,
       parsed_value: String(parsed.value),
-      trigger,   // 'finalTranscript' | 'srEnded' | 'tap' | 'timeout' | 'tts_fallback'
+      trigger,   // 'tap' (normal) | 'inactivity' (walked away) | 'unknown' (tts fallback)
     });
 
     const next = i + 1;
@@ -110,8 +113,7 @@ export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
   };
 
   const speakQuestion = (i: number) => {
-    didAdvanceRef.current   = false;
-    wasListeningRef.current = false;
+    didAdvanceRef.current = false;
     setFlowState('speaking_question');
     cLog('eligibility.question', { index: i, total: questions.length, type: questionHint(questions[i]).replace('Say:  ', '').slice(0, 40) });
 
@@ -128,57 +130,46 @@ export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
       if (!mountedRef.current) return;
       setFlowState('waiting_for_answer');
       clearTranscript();
-      startListening(false);
-      // Fallback timeout — fires if user never speaks and silence detection doesn't trigger
-      timeoutRef.current = setTimeout(() => {
-        if (!mountedRef.current || didAdvanceRef.current) return;
-        cWarn('eligibility.timeout', { q_index: i });
-        didAdvanceRef.current = true;
-        advanceOrComplete(i, null, 'timeout');
-      }, VOICE_ELIGIBILITY_WAIT_SEC * 1000);
+      // Continuous: the mic stays open and never auto-stops on a pause. The user
+      // taps the orb to confirm their answer (tap-to-confirm) — see the orb onClick
+      // and the inactivity guard effect below.
+      startListening(true);
     });
   };
 
   useEffect(() => {
+    // Reset on (re)mount — React StrictMode remounts in dev without recreating
+    // refs, so without this mountedRef stays false after the first cycle and the
+    // flow can never advance.
+    mountedRef.current = true;
     speakQuestion(0);
     return () => {
       mountedRef.current = false;
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       stopListening();
-      window.speechSynthesis.cancel();
+      stopSpeaking();
     };
   }, []);
 
-  // ── Trigger 1: advance when a FINAL result arrives (not interim)
-  // 300ms debounce lets multi-word answers like "women's shelter" complete
+  // ── Abandonment guard (NOT an interruption).
+  // While waiting for an answer, arm a timer that fires only after the user has
+  // been inactive for VOICE_ELIGIBILITY_WAIT_SEC. Re-runs (resetting the timer)
+  // on every transcript change, so an actively-speaking user is never cut off —
+  // it only catches someone who walked away. Normal advance is the orb tap.
   useEffect(() => {
-    if (flowState !== 'waiting_for_answer' || transcriptFinal.length < 2 || didAdvanceRef.current) return;
-    const t = setTimeout(() => {
+    if (flowState !== 'waiting_for_answer' || didAdvanceRef.current) return;
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
       if (!mountedRef.current || didAdvanceRef.current) return;
       didAdvanceRef.current = true;
-      advanceOrComplete(idx, transcriptFinal, 'finalTranscript');
-    }, 300);
-    return () => clearTimeout(t);
-  }, [transcriptFinal]);
-
-  // ── Trigger 2: advance when SR ends naturally (silence detection fired)
-  // This catches short answers like "yes"/"no" where the final result may not
-  // reach the threshold above before SR closes.
-  useEffect(() => {
-    if (isListening) {
-      wasListeningRef.current = true;
-      return;
-    }
-    if (!wasListeningRef.current) return;
-    wasListeningRef.current = false;
-    if (flowState !== 'waiting_for_answer' || didAdvanceRef.current || !mountedRef.current) return;
-    // Use best available transcript: final preferred, fall back to live (interim)
-    const best = transcriptFinal.length >= 2
-      ? transcriptFinal
-      : transcript.length >= 2 ? transcript : null;
-    didAdvanceRef.current = true;
-    advanceOrComplete(idx, best, 'srEnded');
-  }, [isListening]);
+      const best = transcriptFinal.length >= 2
+        ? transcriptFinal
+        : transcript.length >= 2 ? transcript : null;
+      cWarn('eligibility.inactivity', { q_index: idx, had_answer: best !== null });
+      advanceOrComplete(idx, best, 'inactivity');
+    }, VOICE_ELIGIBILITY_WAIT_SEC * 1000);
+    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
+  }, [flowState, transcript, transcriptFinal, idx]);
 
   const orbState = flowState === 'speaking_question' ? 'speaking'
     : flowState === 'waiting_for_answer' ? 'listening'
@@ -196,13 +187,41 @@ export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
           style={{ background: 'rgba(26,147,187,0.12)', color: 'rgba(114,200,226,0.65)', border: '1px solid rgba(56,174,210,0.2)' }}>
           Question {idx + 1} of {questions.length}
         </span>
-        <button
-          onClick={() => { cLog('eligibility.skip', { q_index: idx }); if (timeoutRef.current) clearTimeout(timeoutRef.current); stopListening(); onSkip(); }}
-          className="text-sm font-medium px-3 py-1.5 rounded-full transition-all"
-          style={{ color: 'rgba(114,200,226,0.4)', border: '1px solid rgba(56,174,210,0.12)', background: 'transparent' }}>
-          Skip →
-        </button>
+        <div className="flex items-center gap-2">
+          <MuteButton muted={muted} onToggle={toggleMute} />
+          <button
+            tabIndex={-1}
+            onClick={() => {
+              cLog('eligibility.type', { q_index: idx });
+              if (timeoutRef.current) clearTimeout(timeoutRef.current);
+              didAdvanceRef.current = true;
+              stopListening();
+              stopSpeaking();
+              onType();
+            }}
+            className="text-sm font-medium px-3 py-1.5 rounded-full transition-all"
+            style={{ color: 'rgba(114,200,226,0.55)', border: '1px solid rgba(56,174,210,0.18)', background: 'rgba(26,147,187,0.08)' }}>
+            ⌨️ Type instead
+          </button>
+          <button
+            onClick={() => { cLog('eligibility.skip', { q_index: idx }); if (timeoutRef.current) clearTimeout(timeoutRef.current); didAdvanceRef.current = true; stopListening(); onSkip(); }}
+            className="text-sm font-medium px-3 py-1.5 rounded-full transition-all"
+            style={{ color: 'rgba(114,200,226,0.4)', border: '1px solid rgba(56,174,210,0.12)', background: 'transparent' }}>
+            Skip →
+          </button>
+        </div>
       </div>
+
+      {/* ── What the kiosk heard ── */}
+      {heardText && (
+        <div className="mb-3 flex items-start gap-2 px-1">
+          <span className="text-xs mt-0.5">🗣️</span>
+          <p className="text-sm leading-snug" style={{ color: 'rgba(114,200,226,0.55)' }}>
+            <span className="uppercase tracking-wide text-xs font-semibold mr-1" style={{ color: 'rgba(114,200,226,0.4)' }}>You said:</span>
+            “{heardText}”
+          </p>
+        </div>
+      )}
 
       {/* ── Question card ── */}
       <div className="rounded-2xl px-5 py-4 mb-2"
@@ -243,10 +262,16 @@ export function EligibilityFlow({ questions, onComplete, onSkip }: Props) {
 
       {/* ── Hint ── */}
       {flowState === 'waiting_for_answer' && (
-        <p className="text-sm text-center pb-2"
-          style={{ color: 'rgba(114,200,226,0.38)', letterSpacing: '0.04em' }}>
-          {questionHint(currentQ)}
-        </p>
+        <div className="pb-2">
+          <p className="text-sm text-center"
+            style={{ color: 'rgba(114,200,226,0.38)', letterSpacing: '0.04em' }}>
+            {questionHint(currentQ)}
+          </p>
+          <p className="text-xs text-center mt-1"
+            style={{ color: 'rgba(114,200,226,0.28)', letterSpacing: '0.04em' }}>
+            Take your time — tap the circle when you're done
+          </p>
+        </div>
       )}
     </div>
   );

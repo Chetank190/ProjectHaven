@@ -109,6 +109,7 @@ export function CaseworkerPage() {
               value={clientName}
               onChange={e => setClientName(e.target.value)}
               placeholder="Client name (optional)"
+              aria-label="Client name (optional)"
               className="text-sm px-3 py-2 rounded-lg font-medium transition"
               style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(56,174,210,0.4)', color: 'white' }}
             />

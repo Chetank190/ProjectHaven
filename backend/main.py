@@ -854,6 +854,56 @@ async def nearby_services(lat: float, lon: float, radius_km: float = 2.0, limit:
     }
 
 
+@app.get("/api/v1/hospitals/nearby")
+async def hospitals_nearby(lat: float, lon: float, limit: int = 6):
+    """
+    Return hospitals nearest to (lat, lon), sorted by distance — public ER sites
+    and private clinics together, each tagged with `type` and `emergency`.
+    Surfaced on the kiosk crisis screen for medical emergencies. No radius cap:
+    in an emergency we always show the closest options, even if far.
+    """
+    df = datasets_cpu.get("hospitals") if datasets_cpu else None
+    if df is None:
+        raise HTTPException(status_code=503, detail="Hospital data not loaded")
+
+    import numpy as np
+
+    pdf = df.to_pandas() if hasattr(df, "to_pandas") else df
+    if pdf.empty:
+        return {"hospitals": [], "total": 0}
+
+    R = 6371.0
+    dlat = np.radians(pdf["lat"].values - lat)
+    dlon = np.radians(pdf["lon"].values - lon)
+    a = (np.sin(dlat / 2) ** 2
+         + np.cos(np.radians(lat)) * np.cos(np.radians(pdf["lat"].values)) * np.sin(dlon / 2) ** 2)
+    dist_km = R * 2 * np.arcsin(np.sqrt(a))
+
+    pdf = pdf.copy()
+    pdf["_dist_km"] = dist_km
+    pdf = pdf.sort_values("_dist_km")
+
+    out = []
+    for _, row in pdf.iterrows():
+        d = float(row["_dist_km"])
+        out.append({
+            "name":               str(row.get("name", "")),
+            "address":            str(row.get("address", "")),
+            "lat":                float(row["lat"]),
+            "lon":                float(row["lon"]),
+            "type":               str(row.get("type", "public")),
+            "emergency":          bool(row.get("emergency", False)),
+            "phone":              str(row.get("phone", "")),
+            "hours":              str(row.get("hours", "")),
+            "note":               str(row.get("note", "")),
+            "distance_km":        round(d, 2),
+            "distance_walk_min":  int(round(d / 0.084)),   # ~5 km/h walking
+            "distance_drive_min": max(1, int(round(d / 0.5))),  # ~30 km/h city driving
+        })
+
+    return {"hospitals": out[:limit], "total": len(out)}
+
+
 @app.post("/api/v1/caseworker/briefing")
 async def caseworker_briefing(req: BriefingRequest, request: Request):
     rid = getattr(request.state, "rid", "?")

@@ -164,6 +164,26 @@ export interface NearbyResponse {
   radius_km: number;
 }
 
+export interface Hospital {
+  name:               string;
+  address:            string;
+  lat:                number;
+  lon:                number;
+  type:               'public' | 'private';
+  emergency:          boolean;
+  phone:              string;
+  hours:              string;
+  note:               string;
+  distance_km:        number;
+  distance_walk_min:  number;
+  distance_drive_min: number;
+}
+
+export interface HospitalsResponse {
+  hospitals: Hospital[];
+  total:     number;
+}
+
 export interface KioskReserveRequest {
   session_id:       string;
   facility_name:    string;

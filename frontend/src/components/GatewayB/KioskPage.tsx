@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../../api/client';
 import { KIOSK_HUBS, KIOSK_DEFAULT_HUB, VOICE_SESSION_IDLE_MS, VOICE_MIN_CHARS } from '../../config';
-import type { KioskSessionResponse, KioskRouteResponse, KioskReserveResponse, ItineraryResult } from '../../types/api';
+import type { KioskSessionResponse, KioskRouteResponse, KioskReserveResponse, ItineraryResult, Hospital, HospitalsResponse } from '../../types/api';
 import { cLog, cWarn } from '../../lib/clientLog';
 import { useSpeech }       from '../shared/useSpeech';
 import { VoiceOrb }        from './VoiceOrb';
 import { EligibilityFlow } from './EligibilityFlow';
 import { KioskItinerary }  from './KioskItinerary';
 import { ReservationCode } from './ReservationCode';
+import { CrisisHospitals } from './CrisisHospitals';
 import { HavenMatrixLogo } from '../shared/HavenMatrixLogo';
+import { MuteButton }      from '../shared/MuteButton';
 
 type KioskState =
   | 'idle' | 'hub_select' | 'recording'
@@ -22,6 +24,7 @@ export function KioskPage() {
   const {
     speak, startListening, stopListening, transcript, clearTranscript,
     startRecording, stopRecording, transcribeAudio, stopSpeaking,
+    muted, toggleMute,
   } = useSpeech();
   const [kioskState,        setKioskState]        = useState<KioskState>('idle');
   const [hubName,           setHubName]           = useState<string>(KIOSK_DEFAULT_HUB);
@@ -31,6 +34,8 @@ export function KioskPage() {
   const [reservation,       setReservation]       = useState<KioskReserveResponse | null>(null);
   const [crisisHotline,     setCrisisHotline]     = useState<string | null>(null);
   const [crisisText,        setCrisisText]        = useState<string | null>(null);
+  const [crisisCategory,    setCrisisCategory]    = useState<string>('');
+  const [crisisHospitals,   setCrisisHospitals]   = useState<Hospital[] | null>(null);
   const [typedText,         setTypedText]         = useState('');
   const [error,             setError]             = useState<string | null>(null);
   // Saved for intelligent re-route after location change from results screen
@@ -38,9 +43,14 @@ export function KioskPage() {
   const [lastTranscript,    setLastTranscript]    = useState<string>('');
   // Which state triggered hub_select — controls heading text, cancel target, and re-route logic
   const [hubSelectFrom,     setHubSelectFrom]     = useState<KioskState>('idle');
+  // Pending (highlighted-but-not-committed) hub in the selector — lets a user
+  // correct an accidental tap before it triggers a re-route.
+  const [pendingHub,        setPendingHub]        = useState<string>(KIOSK_DEFAULT_HUB);
 
-  const idleTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const kioskStateRef  = useRef<KioskState>('idle');
+  const idleTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const kioskStateRef    = useRef<KioskState>('idle');
+  // Latest hospitals, for the TTS chain in enterCrisis (avoids stale closure).
+  const crisisHospRef    = useRef<Hospital[] | null>(null);
   const hubCoords      = KIOSK_HUBS[hubName] ?? KIOSK_HUBS[KIOSK_DEFAULT_HUB];
 
   useEffect(() => { kioskStateRef.current = kioskState; }, [kioskState]);
@@ -51,11 +61,12 @@ export function KioskPage() {
   const resetIdle = () => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
-      // Never interrupt active operations, typing mid-input, or the reservation
-      // code screen (user may still be reading / printing their code).
-      const noInterrupt = ['eligibility', 'routing', 'processing', 'typing', 'done', 'reserving', 'reservation_done'];
+      // Never interrupt active operations, typing mid-input, the reservation
+      // code screen (user may still be reading / printing their code), or the
+      // crisis screen (never auto-dismiss emergency guidance from under someone).
+      const noInterrupt = ['eligibility', 'routing', 'processing', 'typing', 'done', 'reserving', 'reservation_done', 'crisis'];
       if (noInterrupt.includes(kioskStateRef.current)) return;
-      window.speechSynthesis.cancel();
+      stopSpeaking();
       setKioskState('idle');
       setSessionId(null);
       setQuestions([]);
@@ -91,7 +102,60 @@ export function KioskPage() {
       stopRecording();   // discard in-progress audio
     }
     setHubSelectFrom(fromState);
+    setPendingHub(hubName);   // start with the current location highlighted
     setKioskState('hub_select');
+  };
+
+  // Single clean path into the text fallback from any voice screen. Tears down
+  // TTS, recognition, and any in-progress recording so no mic is left open.
+  const switchToTyping = async () => {
+    cLog('typing.switch', { from: kioskStateRef.current });
+    stopSpeaking();
+    stopListening();
+    await stopRecording();   // discard any in-progress audio blob
+    clearTranscript();
+    setError(null);
+    setTypedText('');
+    setKioskState('typing');
+  };
+
+  // Single entry into the crisis screen. Speaks the escalation immediately and,
+  // for medical emergencies, fetches the nearest hospitals (public ERs + private
+  // clinics) and names the closest ER once the 9-1-1 guidance finishes.
+  const enterCrisis = (
+    data: { crisis_hotline?: string | null; escalation_text?: string | null; crisis_category?: string | null },
+    coords: [number, number],
+  ) => {
+    const cat = data.crisis_category ?? '';
+    const esc = data.escalation_text ?? 'Please call for crisis support.';
+    setCrisisHotline(data.crisis_hotline ?? '988');
+    setCrisisText(esc);
+    setCrisisCategory(cat);
+    setCrisisHospitals(null);
+    crisisHospRef.current = null;
+    setKioskState('crisis');
+
+    if (cat === 'medical') {
+      api.get<HospitalsResponse>('/hospitals/nearby', {
+        params: { lat: coords[0], lon: coords[1], limit: 6 },
+      }).then(r => {
+        setCrisisHospitals(r.data.hospitals);
+        crisisHospRef.current = r.data.hospitals;
+      }).catch(() => {
+        setCrisisHospitals([]);
+        crisisHospRef.current = [];
+      });
+      speak(esc, () => {
+        // The user may have dismissed the crisis screen before esc finished —
+        // tapping "return" calls stopSpeaking() → cancel(), which fires this
+        // onEnd. Don't announce a hospital onto the idle (or any other) screen.
+        if (kioskStateRef.current !== 'crisis') return;
+        const er = crisisHospRef.current?.find(h => h.emergency);
+        if (er) speak(`The closest emergency room is ${er.name}, about ${er.distance_drive_min} minutes away by car.`);
+      });
+    } else {
+      speak(esc);
+    }
   };
 
   const handleOrbTap = async () => {
@@ -130,10 +194,9 @@ export function KioskPage() {
 
     if (!captured || captured.trim().length < VOICE_MIN_CHARS) {
       cWarn('recording.too_short', { chars: captured.length, source: transcriptSource });
-      setTypedText('');
       speak(
         "Sorry, I couldn't hear that clearly. Tap the button to try again, or tap the keyboard icon below to type instead.",
-        () => setKioskState('typing'),
+        () => { switchToTyping(); },
       );
       setKioskState('done');
       return;
@@ -149,10 +212,7 @@ export function KioskPage() {
       });
       if (r.data.next_step === 'crisis') {
         cLog('session.crisis', { category: r.data.crisis_category });
-        setCrisisHotline(r.data.crisis_hotline ?? '988');
-        setCrisisText(r.data.escalation_text ?? '');
-        setKioskState('crisis');
-        speak(r.data.escalation_text ?? 'Please call 9-8-8 for crisis support.');
+        enterCrisis(r.data, hubCoords);
         return;
       }
       cLog('session.created', {
@@ -238,10 +298,7 @@ export function KioskPage() {
         origin_lon: hubCoords[1],
       });
       if (r.data.next_step === 'crisis') {
-        setCrisisHotline(r.data.crisis_hotline ?? '988');
-        setCrisisText(r.data.escalation_text ?? '');
-        setKioskState('crisis');
-        speak(r.data.escalation_text ?? 'Please call 9-8-8 for crisis support.');
+        enterCrisis(r.data, hubCoords);
         return;
       }
       setSessionId(r.data.session_id);
@@ -259,11 +316,11 @@ export function KioskPage() {
     }
   };
 
-  // Intelligent hub selection:
+  // Commit a hub the user has confirmed (not just tapped). Intelligent routing:
   // • From 'speaking': re-run the same request from the new location (no re-speaking needed)
   // • From 'typing':   return to typing screen with new coords applied at submit time
   // • From anything else: reset to idle at the new location
-  const handleHubSelect = async (name: string) => {
+  const commitHub = async (name: string) => {
     const newCoords = KIOSK_HUBS[name] as [number, number] ?? hubCoords;
     setHubName(name);
 
@@ -277,10 +334,7 @@ export function KioskPage() {
           origin_lon:  newCoords[1],
         });
         if (r.data.next_step === 'crisis') {
-          setCrisisHotline(r.data.crisis_hotline ?? '988');
-          setCrisisText(r.data.escalation_text ?? '');
-          setKioskState('crisis');
-          speak(r.data.escalation_text ?? 'Please call 9-8-8 for crisis support.');
+          enterCrisis(r.data, newCoords);
           return;
         }
         const newSid = r.data.session_id!;
@@ -337,16 +391,16 @@ export function KioskPage() {
           style={{ color: 'rgba(255,255,255,0.3)' }}>
           {isReroute
             ? "We'll re-search from the new location — no need to repeat yourself"
-            : 'Choose your nearest location for accurate directions'}
+            : 'Tap your nearest location, then press Confirm'}
         </p>
 
         <div className="w-full max-w-lg grid grid-cols-2 gap-3">
           {HUB_NAMES.map(name => {
-            const isSelected = name === hubName;
+            const isSelected = name === pendingHub;
             return (
               <button
                 key={name}
-                onClick={() => handleHubSelect(name)}
+                onClick={() => setPendingHub(name)}
                 className="text-left rounded-2xl px-4 py-4 transition-all"
                 style={{
                   background: isSelected ? 'rgba(26,147,187,0.20)' : 'rgba(255,255,255,0.04)',
@@ -367,14 +421,34 @@ export function KioskPage() {
           })}
         </div>
 
-        {hubName && kioskState === 'hub_select' && (
+        {/* Confirm + Back — tapping a tile only highlights it; nothing commits
+            (and no re-route fires) until the user confirms, so an accidental
+            wrong tap is harmless. */}
+        <div className="w-full max-w-lg mt-8 flex flex-col gap-3">
           <button
-            onClick={() => setKioskState(cancelTarget)}
-            className="mt-8 text-sm font-light px-6 py-3 rounded-xl"
-            style={{ color: 'rgba(114,200,226,0.4)', border: '1px solid rgba(26,147,187,0.15)' }}>
-            Cancel
+            onClick={() => { if (pendingHub) commitHub(pendingHub); }}
+            disabled={!pendingHub}
+            className="w-full py-4 rounded-2xl text-lg font-semibold transition-all"
+            style={{
+              background: pendingHub ? 'linear-gradient(135deg, #1A7A9A, #38AED2)' : 'rgba(255,255,255,0.05)',
+              color:      pendingHub ? 'white' : 'rgba(255,255,255,0.25)',
+              border:     pendingHub ? 'none' : '1px solid rgba(255,255,255,0.08)',
+              cursor:     pendingHub ? 'pointer' : 'not-allowed',
+            }}>
+            {isReroute
+              ? `Search from ${pendingHub || '…'} →`
+              : pendingHub ? `Confirm — ${pendingHub}` : 'Pick a location above'}
           </button>
-        )}
+
+          {hubName && kioskState === 'hub_select' && (
+            <button
+              onClick={() => setKioskState(cancelTarget)}
+              className="w-full text-sm font-light py-3 rounded-xl"
+              style={{ color: 'rgba(114,200,226,0.45)', border: '1px solid rgba(26,147,187,0.15)' }}>
+              ← Back{isReroute ? ' — keep current location' : ''}
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -438,9 +512,12 @@ export function KioskPage() {
           </span>
         </button>
 
+        <MuteButton muted={muted} onToggle={toggleMute} className="fixed top-4 right-4 z-50" />
+
         <KioskItinerary
           itinerary={routeResult.itinerary}
           ttsScript={routeResult.tts_script}
+          heardText={lastTranscript}
           originLat={hubCoords[0]}
           originLon={hubCoords[1]}
           hubName={hubName}
@@ -459,28 +536,45 @@ export function KioskPage() {
 
   // ── Crisis screen ─────────────────────────────────────────────────────────────
   if (kioskState === 'crisis') {
+    const isMedical = crisisCategory === 'medical';
+    const resetCrisis = () => {
+      stopSpeaking();
+      setKioskState('idle');
+      setCrisisHotline(null); setCrisisText(null); setCrisisCategory('');
+      setCrisisHospitals(null); crisisHospRef.current = null;
+      // Reset all session state so a re-record starts completely fresh
+      setSessionId(null); setQuestions([]); setLastAnswers({}); setLastTranscript('');
+    };
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-8 py-12 text-center"
+      <div className="min-h-screen flex flex-col items-center px-6 py-10 overflow-y-auto"
         style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #1A0A0A 100%)' }}>
-        <div className="text-6xl mb-6">🆘</div>
-        <h2 className="text-4xl font-light mb-4" style={{ color: 'rgba(255,200,100,0.9)' }}>
+        <MuteButton muted={muted} onToggle={toggleMute} className="fixed top-4 right-4 z-50" />
+        <div className="text-5xl mb-4 mt-2">🆘</div>
+        <h2 className="text-3xl font-light mb-3 text-center" style={{ color: 'rgba(255,200,100,0.9)' }}>
           Help is available
         </h2>
-        <p className="text-2xl font-light leading-relaxed max-w-lg mb-8"
+        <p className="text-lg font-light leading-relaxed max-w-lg mb-6 text-center"
           style={{ color: 'rgba(255,255,255,0.8)' }}>
           {crisisText}
         </p>
-        <div className="text-5xl font-bold mb-8" style={{ color: '#FBBF24' }}>
-          {crisisHotline}
-        </div>
+
+        {/* Tap-to-call the emergency line */}
+        <a
+          href={`tel:${(crisisHotline ?? '911').replace(/[^0-9+]/g, '')}`}
+          className="flex flex-col items-center px-12 py-4 rounded-2xl mb-8"
+          style={{ background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.45)' }}>
+          <span className="text-xs uppercase tracking-widest font-semibold" style={{ color: 'rgba(251,191,36,0.7)' }}>
+            Tap to call
+          </span>
+          <span className="text-5xl font-bold" style={{ color: '#FBBF24' }}>{crisisHotline}</span>
+        </a>
+
+        {/* Medical emergencies: nearest public ERs + private clinics */}
+        {isMedical && <CrisisHospitals hospitals={crisisHospitals} />}
+
         <button
-          onClick={() => {
-            setKioskState('idle');
-            setCrisisHotline(null); setCrisisText(null);
-            // Reset all session state so a re-record starts completely fresh
-            setSessionId(null); setQuestions([]); setLastAnswers({}); setLastTranscript('');
-          }}
-          className="mt-4 text-lg font-light px-8 py-4 rounded-2xl transition-all"
+          onClick={resetCrisis}
+          className="mt-8 mb-4 text-lg font-light px-8 py-4 rounded-2xl transition-all"
           style={{
             color: 'rgba(114,200,226,0.5)',
             border: '1px solid rgba(26,147,187,0.2)',
@@ -583,8 +677,10 @@ export function KioskPage() {
         style={{ background: 'linear-gradient(160deg, #0A1E2E, #0D2436)' }}>
         <EligibilityFlow
           questions={questions}
+          heardText={lastTranscript}
           onComplete={onEligibilityComplete}
           onSkip={() => sessionId && submitRoute(sessionId, {})}
+          onType={switchToTyping}
         />
       </div>
     );
@@ -632,6 +728,9 @@ export function KioskPage() {
         </span>
       </div>
 
+      {/* Mute toggle */}
+      <MuteButton muted={muted} onToggle={toggleMute} className="absolute top-4 right-4 z-50" />
+
       {error && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 rounded-xl px-5 py-2.5 text-sm font-medium"
           style={{ background: 'rgba(26,147,187,0.15)', border: '1px solid rgba(56,174,210,0.3)', color: '#AADEED' }}>
@@ -639,10 +738,11 @@ export function KioskPage() {
         </div>
       )}
 
-      <div className="flex-1 relative">
+      <div className="flex-1 relative flex flex-col items-center justify-center">
         <VoiceOrb state={orbState} onClick={handleOrbTap} />
 
-        {(kioskState === 'recording' || kioskState === 'processing') && transcript && (
+        {/* Live transcript while the mic is open */}
+        {kioskState === 'recording' && transcript && (
           <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-full max-w-sm px-6 text-center pointer-events-none">
             <p className="text-xl font-light leading-relaxed" style={{ color: 'rgba(114,200,226,0.85)' }}>
               {transcript}
@@ -650,10 +750,23 @@ export function KioskPage() {
           </div>
         )}
 
+        {/* Captured transcript persists through processing + routing so the
+            person can confirm what the kiosk heard while they wait. */}
+        {(kioskState === 'processing' || kioskState === 'routing') && lastTranscript && (
+          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-full max-w-sm px-6 text-center pointer-events-none">
+            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: 'rgba(114,200,226,0.45)' }}>
+              You said
+            </p>
+            <p className="text-lg font-light leading-relaxed" style={{ color: 'rgba(114,200,226,0.8)' }}>
+              “{lastTranscript}”
+            </p>
+          </div>
+        )}
+
         {(kioskState === 'idle' || kioskState === 'done') && (
           <button
             tabIndex={-1}
-            onClick={() => { clearTranscript(); setTypedText(''); setKioskState('typing'); }}
+            onClick={switchToTyping}
             className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 px-5 py-2.5 rounded-full transition-all"
             style={{
               color: 'rgba(114,200,226,0.30)',
@@ -662,6 +775,24 @@ export function KioskPage() {
               fontSize: '0.8rem',
             }}>
             ⌨️ Can't speak? Type instead
+          </button>
+        )}
+
+        {/* Escape hatch while recording — bail to typing without finishing the take.
+            tabIndex={-1} keeps Tab on the VoiceOrb (AGENTS.md Rule 6). Shown only in
+            'recording' (not 'processing') to avoid racing an in-flight session request. */}
+        {kioskState === 'recording' && (
+          <button
+            tabIndex={-1}
+            onClick={switchToTyping}
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 px-5 py-2.5 rounded-full transition-all"
+            style={{
+              color: 'rgba(114,200,226,0.30)',
+              border: '1px solid rgba(56,174,210,0.10)',
+              background: 'rgba(26,147,187,0.04)',
+              fontSize: '0.8rem',
+            }}>
+            ⌨️ Type instead
           </button>
         )}
       </div>

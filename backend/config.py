@@ -28,6 +28,8 @@ GTFS_STOPS_TXT  = DATA_DIR / "stops.txt"
 YOUTH_SPACES_CSV = DATA_DIR / "youth_spaces.csv"
 LIBRARIES_CSV    = DATA_DIR / "libraries.csv"
 RESPITE_CSV      = DATA_DIR / "respite_sites.csv"
+# Hospitals — surfaced on the kiosk crisis screen for medical emergencies
+HOSPITALS_CSV    = DATA_DIR / "hospitals.csv"
 # Telemetry shadow census
 TELEMETRY_CSV    = DATA_DIR / "daily_telemetry.csv"
 
@@ -146,18 +148,34 @@ JSON schema (all fields required):
 }
 
 Field rules:
-- needs_shelter: true if person needs a bed, shelter, place to sleep, or housing
+- needs_shelter: true if person needs a bed, shelter, place to sleep, or housing.
+  If someone is cold and wants a place to spend the night, set BOTH needs_shelter and needs_respite.
 - needs_rehab: true if any mention of drugs, alcohol, detox, withdrawal, mental health crisis
-- needs_food: true if person is hungry, needs food, a meal, food bank
-- needs_supplies: true if person needs clothing, blankets, winter gear
+- needs_food: true if person is hungry, needs food, a meal, a hot or warm meal, food bank, or something to eat
+- needs_supplies: true if person needs PHYSICAL ITEMS — clothing, a jacket, coat, blanket, or winter gear.
+  NOT for warm food (that is needs_food) and NOT for wanting to be in a warm place (that is needs_respite).
 - needs_hygiene: true if person needs a shower, laundry, washroom, or hygiene items
 - needs_youth_service: true if person is a youth (13-24) needing safe indoor space, programs, computers
 - needs_library: true if person needs internet access, computers, digital forms, daytime respite in a library
-- needs_respite: true if person needs a warming centre, daytime low-barrier shelter, or just somewhere safe and warm
+- needs_respite: true if person needs a warming centre, daytime low-barrier shelter, or somewhere safe and
+  warm — including being cold/freezing, wanting to stay or keep warm, or to get out of the cold
 - sector: infer from age/demographic; default to "any"
 - has_id: only set if explicitly mentioned; otherwise null
 - sobriety_status: only set if explicitly mentioned; otherwise null
 - group_size: only set if explicitly mentioned; otherwise null
+
+Disambiguation — the word "warm" is ambiguous; classify by what it describes:
+- "warm meal" / "hot meal" / "something warm to eat" / "soup" → needs_food = true (NOT needs_supplies)
+- "warm clothes" / "warm jacket" / "warm coat" / "blanket" / "winter gear" → needs_supplies = true
+- "cold" / "freezing" / "stay warm" / "keep warm" / "out of the cold" / "a warm place" → needs_respite = true
+  (and needs_shelter = true as well if they want to sleep or stay overnight)
+
+Examples (input → output):
+"I am very cold, I need a place to stay warm" →
+{"needs_shelter": true, "needs_rehab": false, "needs_food": false, "needs_supplies": false, "needs_hygiene": false, "needs_youth_service": false, "needs_library": false, "needs_respite": true, "sector": "any", "has_id": null, "sobriety_status": null, "group_size": null}
+
+"I am very hungry, I need something warm to eat" →
+{"needs_shelter": false, "needs_rehab": false, "needs_food": true, "needs_supplies": false, "needs_hygiene": false, "needs_youth_service": false, "needs_library": false, "needs_respite": false, "sector": "any", "has_id": null, "sobriety_status": null, "group_size": null}
 """
 
 NIM_BRIEFING_PROMPT = """You are writing a shift briefing for a Toronto social services outreach team.

@@ -225,7 +225,8 @@ def build_tts_itinerary_script(itinerary: dict, client_name: str | None = None) 
     )
     lines.append(greeting)
 
-    stops = [(pillar, results[0]) for pillar, results in itinerary.items() if results]
+    # Keep the full ranked list per pillar so we can speak a backup option.
+    stops = [(pillar, results) for pillar, results in itinerary.items() if results]
 
     if not stops:
         return (
@@ -234,7 +235,8 @@ def build_tts_itinerary_script(itinerary: dict, client_name: str | None = None) 
         )
 
     order_words = {1: "First", 2: "Next", 3: "Also", 4: "Also", 5: "Also"}
-    for i, (pillar, r) in enumerate(stops, 1):
+    for i, (pillar, results) in enumerate(stops, 1):
+        r = results[0]
         walk = int(r.get("distance_walk_min", 0))
         transit = "There's a TTC stop nearby." if r.get("transit_accessible") else ""
         lead = order_words.get(i, "Also")
@@ -242,8 +244,27 @@ def build_tts_itinerary_script(itinerary: dict, client_name: str | None = None) 
         line = f"{lead}, go to {r.get('name', 'a facility nearby')}, for {pillar}. "
         line += f"It's about a {walk} minute walk, at {r.get('address', 'the address shown on screen')}. {transit}"
 
+        # Reassure on the ID barrier — fear of being turned away keeps people on the street.
+        if r.get("requires_id") is False:
+            line += " You will not need any ID for this one."
+
+        # Time / capacity nudge — a closed or nearly-full place is the #1 reason a trip wastes scarce energy.
+        if r.get("open_now") is False:
+            line += " It may be closed right now, so please try the backup or call first."
+        elif r.get("occupancy_ratio") is not None and float(r.get("occupancy_ratio") or 0) >= 0.8:
+            line += " It's very busy, so head there right away."
+
         if r.get("intake_preparation"):
             line += f" When you get there: {r['intake_preparation']}"
+
+        # Always offer a fallback so a single full door is not a dead end.
+        if len(results) > 1:
+            b = results[1]
+            b_walk = int(b.get("distance_walk_min", 0))
+            line += (
+                f" If they cannot take you, your backup is "
+                f"{b.get('name', 'another place nearby')}, about {b_walk} minutes away."
+            )
 
         lines.append(line.strip())
 

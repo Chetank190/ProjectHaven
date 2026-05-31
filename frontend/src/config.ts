@@ -1,10 +1,24 @@
-// Mirror of backend/config.py voice constants — keep in sync manually
+// Mirror of backend/config.py voice constants — keep in sync manually.
+// NOTE: VOICE_ENDPOINT_SILENCE_MS and the VOICE_*_LANG constants below are
+// frontend-only (browser STT tuning) and have no backend mirror. The backend's
+// VOICE_SILENCE_KILL_SEC (=10) governs server session GC, not browser capture.
 
 export const VOICE_HOLD_MAX_MS      = 45_000;
-export const VOICE_SILENCE_KILL_MS  = 2_500;  // 2.5s natural pause before stopping
+// Superseded by VOICE_ENDPOINT_SILENCE_MS — kept for reference, no longer used for endpointing.
+export const VOICE_SILENCE_KILL_MS  = 2_500;
+// End-of-speech window: how long after the user stops talking we treat them as done.
+// Only armed AFTER speech is detected (see useSpeech.ts), so it tolerates natural pauses.
+export const VOICE_ENDPOINT_SILENCE_MS = 4_000;
 export const VOICE_SESSION_IDLE_MS  = 120_000;
 export const VOICE_MIN_CHARS              = 10;
 export const VOICE_ELIGIBILITY_WAIT_SEC   = 30;
+
+// Web Speech API locales. Recognition stays en-IN (team demo accent); TTS is en-US.
+// Override recognition per-environment with VITE_VOICE_LANG if ever needed.
+export const VOICE_RECOGNITION_LANG: string =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (import.meta as any).env?.VITE_VOICE_LANG || 'en-IN';
+export const VOICE_TTS_LANG = 'en-US';
 
 export const API_BASE = '/api/v1';
 

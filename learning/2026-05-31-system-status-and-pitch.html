@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Haven Matrix — System Status & Pitch (2026-05-31)</title>
+<style>
+  :root {
+    --bg0:#0A1E2E; --bg1:#0D2436; --bg2:#061825;
+    --teal:#38AED2; --teal2:#72C8E2; --teal-dim:rgba(114,200,226,0.55);
+    --ink:rgba(255,255,255,0.92); --ink-dim:rgba(255,255,255,0.55);
+    --sage:#3A8A71; --sage-l:#80C0AA; --amber:#FBBF24; --red:#F87171;
+    --card:rgba(255,255,255,0.04); --line:rgba(56,174,210,0.20);
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:linear-gradient(160deg,var(--bg0) 0%,var(--bg1) 55%,var(--bg2) 100%);
+    color:var(--ink); line-height:1.55; padding:48px 20px; min-height:100vh;
+  }
+  .wrap { max-width:980px; margin:0 auto; }
+  header { text-align:center; margin-bottom:28px; }
+  .logo { display:inline-flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .logo .dot { width:14px; height:14px; border-radius:50%;
+    background:radial-gradient(circle at 30% 30%,var(--teal2),#155F79); box-shadow:0 0 14px rgba(56,174,210,0.6); }
+  .logo span { letter-spacing:.28em; text-transform:uppercase; font-size:12px; color:var(--teal-dim); font-weight:600; }
+  h1 { font-weight:300; font-size:2.1rem; margin:.2em 0 .1em; color:var(--teal2); }
+  .sub { color:var(--ink-dim); font-size:.95rem; }
+  .stage {
+    margin:26px 0; padding:18px 22px; border-radius:16px;
+    background:rgba(58,138,113,0.10); border:1px solid rgba(58,138,113,0.4);
+  }
+  .stage b { color:var(--sage-l); }
+  h2 { font-weight:400; font-size:1.35rem; color:var(--teal2); margin:38px 0 14px;
+    border-bottom:1px solid var(--line); padding-bottom:8px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px 20px; }
+  .card h3 { margin:0 0 10px; font-size:1rem; font-weight:600; display:flex; align-items:center; gap:8px; }
+  .tag { font-size:.66rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    padding:3px 9px; border-radius:999px; }
+  .tag.ok { background:rgba(58,138,113,0.2); color:var(--sage-l); border:1px solid rgba(58,138,113,0.45); }
+  .tag.gpu { background:rgba(26,147,187,0.18); color:var(--teal2); border:1px solid var(--line); }
+  .tag.warn { background:rgba(251,191,36,0.14); color:var(--amber); border:1px solid rgba(251,191,36,0.4); }
+  ul { margin:8px 0 0; padding-left:18px; } li { margin:6px 0; color:var(--ink); font-size:.93rem; }
+  li b { color:var(--teal2); font-weight:600; }
+  .flow { counter-reset:step; display:grid; gap:10px; }
+  .flow .step { display:flex; gap:14px; align-items:flex-start; background:var(--card);
+    border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
+  .flow .step::before { counter-increment:step; content:counter(step);
+    flex:0 0 28px; height:28px; border-radius:50%; display:grid; place-items:center;
+    background:rgba(26,147,187,0.18); color:var(--teal2); font-weight:700; font-size:.85rem;
+    border:1px solid var(--line); }
+  .flow .step .t { font-weight:600; color:var(--teal2); }
+  .flow .step .d { color:var(--ink-dim); font-size:.9rem; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; margin:6px 0 4px; }
+  .stat { text-align:center; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 8px; }
+  .stat .n { font-size:1.7rem; font-weight:700; color:var(--teal2); line-height:1; }
+  .stat .l { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-dim); margin-top:6px; }
+  .quotes li { font-style:italic; color:var(--teal2); }
+  .changes li { color:var(--ink); }
+  footer { margin-top:40px; text-align:center; color:var(--ink-dim); font-size:.8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo"><span class="dot"></span><span>Haven Matrix</span></div>
+    <h1>System Status &amp; Pitch Notes</h1>
+    <div class="sub">Dual-gateway, GPU-accelerated social-services triage · Toronto · 2026-05-31</div>
+  </header>
+
+  <div class="stage">
+    <b>Stage:</b> Code-complete and build-verified end-to-end; demo-ready pending on-device
+    validation (local NIM LLM responses, browser-microphone STT, and GX10 GPU KNN speedup).
+    The full caseworker + kiosk journey runs today on a laptop in CPU / fallback mode.
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">8</div><div class="l">Service pillars</div></div>
+    <div class="stat"><div class="n">~2,960</div><div class="l">Service records</div></div>
+    <div class="stat"><div class="n">9,255</div><div class="l">TTC stops</div></div>
+    <div class="stat"><div class="n">22</div><div class="l">API endpoints</div></div>
+    <div class="stat"><div class="n">4-tier</div><div class="l">LLM fallback</div></div>
+  </div>
+
+  <h2>What it does — successfully</h2>
+  <div class="grid">
+    <div class="card">
+      <h3><span class="tag ok">Verified</span> Dual-gateway triage</h3>
+      <ul>
+        <li><b>Caseworker</b> (auth'd): notes → itinerary, map, warm-handoff scripts, shift briefing, capacity ticker, case history.</li>
+        <li><b>Kiosk</b>: voice-first self-serve for an unhoused person.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag ok">Verified</span> LLM as a compiler</h3>
+      <ul>
+        <li>Strict JSON schema + <b>full fallback chain</b>: cloud Gemma → local Nemotron → local Gemma → <b>regex</b>.</li>
+        <li>Never hard-fails with the model or network gone.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag ok">Verified</span> Constraint-aware routing</h3>
+      <ul>
+        <li>8 pillars over ~2,960 records + 9,255 stops.</li>
+        <li>Masks ID / sobriety / sector / gender / family <b>before</b> the solve; scores distance + occupancy + transit; open-now aware.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag ok">Verified</span> Safety before the AI</h3>
+      <ul>
+        <li><b>Crisis gate</b> → 988 / 911 + nearest ERs (zero-network).</li>
+        <li><b>PII scrubbed</b>, prompt-injection blocked, optional NeMo guardrails — all pre-inference.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag ok">Verified</span> Dignified voice UX</h3>
+      <ul>
+        <li>Never cuts you off; eligibility is <b>tap-to-confirm</b>.</li>
+        <li><b>Type instead</b> on every screen; mute; speaks once; calming centered orb; reservation codes.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag ok">Verified</span> Operational smarts</h3>
+      <ul>
+        <li>Returning-client memory (RAG), weather-aware (extreme cold → warming centres).</li>
+        <li>"Shadow Census" anonymized demand telemetry; live GPU-vs-CPU benchmark per request.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag gpu">On the Spark</span> Local + GPU</h3>
+      <ul>
+        <li>Fully <b>on-device</b> inference (Nemotron/Gemma NIM) + Parakeet ASR — audio never leaves the box.</li>
+        <li>cuML KNN in <b>128 GB unified memory</b>: data + model co-resident, sub-10 ms solve, measured speedup.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag warn">Caveat</span> Don't overclaim</h3>
+      <ul>
+        <li>GPU speedup &amp; local-LLM quality must be <b>measured live on the GX10</b>.</li>
+        <li>Demo data pre-cached; live CKAN/weather is best-effort. Browser STT needs Chrome.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>The final interaction — end to end</h2>
+  <div class="flow">
+    <div class="step"><div><div class="t">Idle</div><div class="d">Centered orb, "Tap to speak," spoken welcome (mute-aware).</div></div></div>
+    <div class="step"><div><div class="t">Speak</div><div class="d">Tap-to-stop; on-device ASR + browser STT in parallel; natural pauses don't cut you off; "Type instead" always available.</div></div></div>
+    <div class="step"><div><div class="t">Scrub &amp; screen</div><div class="d">PII redaction → injection / guardrails → crisis gate (988/911 + hospitals) — all before the model.</div></div></div>
+    <div class="step"><div><div class="t">Compile</div><div class="d">LLM → NeedsPayload JSON (regex fallback offline); "warm" disambiguated (meal vs clothing vs warming centre).</div></div></div>
+    <div class="step"><div><div class="t">Eligibility</div><div class="d">Up to 3 spoken questions, tap-to-confirm each — a pause never skips one.</div></div></div>
+    <div class="step"><div><div class="t">Solve</div><div class="d">Constraint-masked KNN on GPU (CPU in parallel for the live benchmark) → ranked itinerary.</div></div></div>
+    <div class="step"><div><div class="t">Deliver</div><div class="d">Spoken + on-screen itinerary, walking map, optional printable reservation code.</div></div></div>
+  </div>
+
+  <h2>Hardened in this work cycle</h2>
+  <div class="card changes">
+    <ul>
+      <li><b>STT:</b> speech-lifecycle endpointing — natural pauses no longer cut people off.</li>
+      <li><b>Eligibility:</b> tap-to-confirm (removed the auto-advance that skipped questions on a pause).</li>
+      <li><b>TTS:</b> fixed the "spoken twice" bug; centralized teardown; added timing-safe mute.</li>
+      <li><b>Crisis:</b> screen no longer auto-dismisses; the "nearest ER" line can't leak onto another screen.</li>
+      <li><b>Triage prompt:</b> "warm"/cold disambiguation + few-shot examples.</li>
+      <li><b>Layout:</b> the speak orb is now centered.</li>
+    </ul>
+  </div>
+
+  <h2>Pitch one-liners</h2>
+  <div class="card"><ul class="quotes">
+    <li>"Routes to shelter, food, a warming centre, or detox in under ten milliseconds on the GPU — and still works with the network and model switched off."</li>
+    <li>"Every model call is a compiler with a deterministic fallback — no hallucinated facilities, no dead ends, PII scrubbed before inference."</li>
+    <li>"A person in crisis gets 988 or 911 and the nearest emergency room before the AI is ever consulted."</li>
+    <li>"Voice-first and dignified — it waits for you, never cuts you off, and lets you type or mute at any time."</li>
+    <li>"128 GB of unified memory holds all the data and the model at once — the benchmark number on screen is a measurement, not a claim."</li>
+  </ul></div>
+
+  <footer>Haven Matrix · NVIDIA Spark Hack Toronto · status as of 2026-05-31 · build verified (tsc + vite)</footer>
+</div>
+</body>
+</html>

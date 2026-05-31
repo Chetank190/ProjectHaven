@@ -21,7 +21,7 @@ function formatExpiry(isoStr: string): string {
 }
 
 export function ReservationCode({ reservation, onReset }: Props) {
-  const { speak } = useSpeech();
+  const { speak, stopSpeaking } = useSpeech();
 
   useEffect(() => {
     const msg =
@@ -30,6 +30,7 @@ export function ReservationCode({ reservation, onReset }: Props) {
       `Go to ${reservation.facility_name} and say this code when you arrive. ` +
       `You can print this page now.`;
     speak(msg);
+    return () => stopSpeaking();
   }, []);
 
   const handlePrint = () => window.print();
