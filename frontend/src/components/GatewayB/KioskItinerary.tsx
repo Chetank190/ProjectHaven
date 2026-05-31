@@ -376,9 +376,21 @@ export function KioskItinerary({ itinerary, ttsScript, heardText, onReset, origi
           })}
 
           {stops.length === 0 && (
-            <div className="text-center py-16">
-              <p className="text-2xl font-light" style={{ color: 'rgba(255,255,255,0.45)' }}>No resources found nearby.</p>
-              <p className="text-xl mt-2" style={{ color: 'rgba(255,255,255,0.28)' }}>Please call 211 for help.</p>
+            <div className="flex flex-col items-center text-center py-12">
+              <p className="text-2xl font-light" style={{ color: 'rgba(255,255,255,0.55)' }}>No open resources found nearby right now.</p>
+              <p className="text-base mt-2 mb-6" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                211 is free, 24/7, and can find help in your language.
+              </p>
+              {/* Tappable on kiosk hardware (same tel: pattern as the crisis screen) */}
+              <a
+                href="tel:211"
+                className="flex flex-col items-center px-12 py-4 rounded-2xl"
+                style={{ background: 'rgba(26,147,187,0.12)', border: '1px solid rgba(56,174,210,0.45)' }}>
+                <span className="text-xs uppercase tracking-widest font-semibold" style={{ color: 'rgba(114,200,226,0.7)' }}>
+                  Tap to call
+                </span>
+                <span className="text-5xl font-bold" style={{ color: '#72C8E2' }}>2-1-1</span>
+              </a>
             </div>
           )}
 

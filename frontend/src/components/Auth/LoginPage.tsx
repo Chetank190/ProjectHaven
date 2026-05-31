@@ -77,21 +77,21 @@ export function LoginPage() {
         <form onSubmit={handle} className="space-y-3">
           <input
             type="email" required autoComplete="email"
-            placeholder="Email address"
+            placeholder="Email address" aria-label="Email address"
             value={email} onChange={e => setEmail(e.target.value)}
             style={inputStyle}
           />
           {tab === 'register' && (
             <input
               type="text" required autoComplete="name"
-              placeholder="Your full name"
+              placeholder="Your full name" aria-label="Your full name"
               value={name} onChange={e => setName(e.target.value)}
               style={inputStyle}
             />
           )}
           <input
             type="password" required autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
-            placeholder="Password"
+            placeholder="Password" aria-label="Password"
             value={password} onChange={e => setPassword(e.target.value)}
             style={inputStyle}
           />
