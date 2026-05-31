@@ -738,7 +738,7 @@ export function KioskPage() {
         </div>
       )}
 
-      <div className="flex-1 relative">
+      <div className="flex-1 relative flex flex-col items-center justify-center">
         <VoiceOrb state={orbState} onClick={handleOrbTap} />
 
         {/* Live transcript while the mic is open */}
