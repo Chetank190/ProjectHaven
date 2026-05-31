@@ -1,0 +1,16 @@
+name,address,lat,lon,type,emergency,phone,hours,note
+St. Michael's Hospital,"30 Bond St, Toronto",43.6536,-79.3776,public,True,416-360-4000,24/7 Emergency,Downtown trauma centre — walk-in ER
+Toronto General Hospital (UHN),"200 Elizabeth St, Toronto",43.6587,-79.3877,public,True,416-340-4800,24/7 Emergency,Major downtown ER
+Mount Sinai Hospital,"600 University Ave, Toronto",43.6575,-79.3889,public,True,416-596-4200,24/7 Emergency,Downtown ER
+Toronto Western Hospital (UHN),"399 Bathurst St, Toronto",43.6536,-79.4053,public,True,416-603-2581,24/7 Emergency,West-downtown ER
+The Hospital for Sick Children,"555 University Ave, Toronto",43.6577,-79.3873,public,True,416-813-1500,24/7 Emergency,Paediatric ER (under 18)
+St. Joseph's Health Centre,"30 The Queensway, Toronto",43.6390,-79.4517,public,True,416-530-6000,24/7 Emergency,West-end ER
+Michael Garron Hospital,"825 Coxwell Ave, Toronto",43.6906,-79.3270,public,True,416-461-8272,24/7 Emergency,East-end ER (Toronto East Health Network)
+Sunnybrook Health Sciences Centre,"2075 Bayview Ave, Toronto",43.7227,-79.3767,public,True,416-480-6100,24/7 Emergency,Major trauma centre — north Toronto
+North York General Hospital,"4001 Leslie St, Toronto",43.7681,-79.3650,public,True,416-756-6000,24/7 Emergency,North York ER
+Humber River Hospital,"1235 Wilson Ave, Toronto",43.7246,-79.4882,public,True,416-242-1000,24/7 Emergency,Northwest ER
+Scarborough Health Network - General,"3050 Lawrence Ave E, Toronto",43.7549,-79.2287,public,True,416-438-2911,24/7 Emergency,Scarborough ER
+Women's College Hospital Urgent Care,"76 Grenville St, Toronto",43.6620,-79.3870,public,False,416-323-6400,Urgent care 8am-8pm,Urgent care (not overnight ER) — minor injuries/illness
+Medcan Clinic,"150 York St, Toronto",43.6489,-79.3820,private,False,416-350-5900,Mon-Fri 7am-7pm,Private clinic — appointment / urgent assessment (not 24/7 ER)
+Cleveland Clinic Canada,"181 Bay St, Toronto",43.6470,-79.3790,private,False,416-507-6600,Mon-Fri 8am-5pm,Private clinic — same-day assessment (not 24/7 ER)
+Don Mills Surgical Unit,"16 York Mills Rd, Toronto",43.7440,-79.4060,private,False,416-485-1633,Mon-Fri 8am-4pm,Private surgical clinic (not emergency)

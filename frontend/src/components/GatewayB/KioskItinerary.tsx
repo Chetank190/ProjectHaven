@@ -6,6 +6,7 @@ import type { Itinerary, ItineraryResult, NearbyService, NearbyResponse } from '
 interface Props {
   itinerary:  Itinerary;
   ttsScript:  string;
+  heardText?: string;
   onReset:    () => void;
   originLat:  number;
   originLon:  number;
@@ -44,8 +45,12 @@ function directionsUrl(lat: number, lon: number): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&travelmode=walking`;
 }
 
-export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, originLon, hubName, onReserve }: Props) {
-  const { speak, stopSpeaking, isSpeaking } = useSpeech();
+export function KioskItinerary({ itinerary, ttsScript, heardText, onReset, originLat, originLon, hubName, onReserve }: Props) {
+  const { speak, stopSpeaking, isSpeaking, muted } = useSpeech();
+  // Muted playback is silent, so for UI gating (the "Speaking…" pill, the
+  // skip-vs-reserve buttons) treat it as not speaking — otherwise the Reserve
+  // button stays hidden for the full silent narration.
+  const speaking   = isSpeaking && !muted;
   const mapRef     = useRef<HTMLDivElement>(null);
   const leafletRef = useRef<unknown>(null);
 
@@ -54,6 +59,9 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
   const [nearby,        setNearby]        = useState<NearbyService[] | null>(null);
   const [nearbyLoading, setNearbyLoading] = useState(false);
   const [nearbyError,   setNearbyError]   = useState(false);
+  // Which alternative (KNN rank) is the active pick per pillar — the solver
+  // returns up to 3; tapping an alternative promotes it to the primary stop.
+  const [selected,      setSelected]      = useState<Record<string, number>>({});
 
   useEffect(() => {
     speak(ttsScript);
@@ -62,7 +70,14 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
 
   const stops = Object.entries(itinerary)
     .filter(([, results]) => results.length > 0)
-    .map(([pillar, results]) => ({ pillar, result: results[0] }));
+    .map(([pillar, results]) => {
+      const idx = Math.min(selected[pillar] ?? 0, results.length - 1);
+      return { pillar, results, idx, result: results[idx] };
+    });
+
+  // Re-key the map whenever the chosen stop for any pillar changes so the
+  // markers and viewport rebuild around the new selection.
+  const routeSig = stops.map(s => `${s.pillar}:${s.result.lat},${s.result.lon}`).join('|');
 
   // ── Fetch nearby services when browse tab opens ───────────────────────────
   useEffect(() => {
@@ -88,10 +103,16 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
     }
   }, [tab]);
 
-  // ── Build Leaflet map when route tab is active and no map exists ──────────
+  // ── Build Leaflet map when route tab is active; rebuild on selection change ──
   useEffect(() => {
-    if (tab !== 'route' || !mapRef.current || leafletRef.current) return;
+    if (tab !== 'route' || !mapRef.current) return;
     let cancelled = false;
+
+    // Tear down a prior instance so an alternative swap re-centres the viewport.
+    if (leafletRef.current) {
+      (leafletRef.current as { remove: () => void }).remove();
+      leafletRef.current = null;
+    }
 
     import('leaflet').then(({ default: L }) => {
       if (cancelled || !mapRef.current || leafletRef.current) return;
@@ -158,7 +179,7 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
     });
 
     return () => { cancelled = true; };
-  }, [tab]);
+  }, [tab, routeSig]);
 
   // Full component unmount cleanup
   useEffect(() => {
@@ -195,6 +216,22 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
     </div>
   );
 
+  // ── What the kiosk heard — shown above both tabs so the person can confirm ──
+  const heardBanner = heardText ? (
+    <div className="flex-shrink-0 px-4 pt-3">
+      <div className="rounded-xl px-3 py-2 flex items-start gap-2"
+        style={{ background: 'rgba(56,174,210,0.07)', border: '1px solid rgba(56,174,210,0.18)' }}>
+        <span className="text-xs mt-0.5">🗣️</span>
+        <div className="min-w-0">
+          <span className="text-xs uppercase tracking-wide font-semibold" style={{ color: 'rgba(114,200,226,0.55)' }}>
+            You said
+          </span>
+          <p className="text-sm leading-snug" style={{ color: 'rgba(255,255,255,0.7)' }}>“{heardText}”</p>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // ─────────────────────────────────────────────────────────────────────────
   // ROUTE TAB
   // ─────────────────────────────────────────────────────────────────────────
@@ -204,7 +241,7 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
 
         {/* ── Map ── */}
         <div className="relative flex-shrink-0" style={{ height: '38vh', minHeight: 240 }}>
-          {isSpeaking && (
+          {speaking && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[500] flex items-center gap-2 px-4 py-2 rounded-full"
               style={{ background: 'rgba(7,21,32,0.88)', backdropFilter: 'blur(8px)', border: '1px solid rgba(56,174,210,0.35)' }}>
               {[0,1,2,3,4].map(i => (
@@ -234,12 +271,13 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
         </div>
 
         {tabBar}
+        {heardBanner}
 
         {/* ── Stop cards ── */}
         <div className="flex-1 overflow-y-auto px-4 pt-3 pb-6 space-y-3"
           style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #0D2436 60%, #061825 100%)' }}>
 
-          {stops.map(({ pillar, result }, i) => {
+          {stops.map(({ pillar, results, idx, result }, i) => {
             const accent = pColor(pillar);
             return (
               <div key={i} className="rounded-2xl overflow-hidden"
@@ -304,6 +342,34 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
                       🧭 Walking directions
                     </a>
                   </div>
+
+                  {/* Alternatives — other nearby options the solver ranked for this
+                      pillar. Tapping one promotes it to the primary stop + re-centres the map. */}
+                  {results.length > 1 && (
+                    <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${accent}22` }}>
+                      <p className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                        {results.length - 1} more {pillar} option{results.length - 1 > 1 ? 's' : ''} nearby — tap to switch
+                      </p>
+                      <div className="space-y-1.5">
+                        {results.map((alt, ai) => ai === idx ? null : (
+                          <button
+                            key={ai}
+                            onClick={() => setSelected(s => ({ ...s, [pillar]: ai }))}
+                            className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left transition-all"
+                            style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium truncate" style={{ color: 'rgba(255,255,255,0.85)' }}>{alt.name}</p>
+                              <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.32)' }}>{alt.address}</p>
+                            </div>
+                            <div className="flex-shrink-0 text-right">
+                              <span className="text-base font-bold tabular-nums" style={{ color: accent }}>{alt.distance_walk_min}</span>
+                              <span className="text-xs ml-0.5" style={{ color: 'rgba(255,255,255,0.32)' }}>min</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -321,7 +387,7 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
             const reserveStop = stops.find(s => s.pillar === 'shelter') ?? stops[0];
             return (
               <div className="flex flex-col gap-3 mt-2">
-                {isSpeaking ? (
+                {speaking ? (
                   /* During TTS: show a dimmed skip button so user can interrupt immediately */
                   <button
                     onClick={onReset}
@@ -378,6 +444,7 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
       </div>
 
       {tabBar}
+      {heardBanner}
 
       {/* Category filter chips */}
       <div className="flex-shrink-0 flex gap-2 px-4 py-2.5 overflow-x-auto"
@@ -518,7 +585,7 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
           onClick={onReset}
           className="w-full mt-4 py-4 rounded-2xl text-base font-light transition-all"
           style={{ color: 'rgba(114,200,226,0.45)', border: '1px solid rgba(26,147,187,0.18)', background: 'rgba(26,147,187,0.04)' }}>
-          {isSpeaking ? 'Skip & start over' : 'Tap to start again'}
+          {speaking ? 'Skip & start over' : 'Tap to start again'}
         </button>
       </div>
     </div>

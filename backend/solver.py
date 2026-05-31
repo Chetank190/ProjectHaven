@@ -174,6 +174,32 @@ def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:
             r = respite_df.to_pandas() if hasattr(respite_df, "to_pandas") else respite_df
             masked["shelter"] = pd.concat([s, r])
 
+    # ── Weather boost: during EXTREME_HEAT, surface cool indoor refuge + water ─
+    # Heat kills unhoused people too. Mirror of the cold path: when someone asks
+    # for somewhere safe to be (respite) or a bed (shelter) during a heat alert,
+    # inject air-conditioned daytime refuges (libraries) and free public water /
+    # cool indoor space (OSM drinking_water + social_facility) into that pool.
+    if weather == "EXTREME_HEAT":
+        cool_sources = []
+        if datasets.get("libraries") is not None:
+            cool_sources.append(datasets["libraries"])
+        osm_df = datasets.get("osm")
+        if osm_df is not None and "amenity" in getattr(osm_df, "columns", []):
+            cool_df = osm_df[osm_df["amenity"].isin(["drinking_water", "social_facility"])]
+            if len(cool_df) > 0:
+                cool_sources.append(cool_df)
+
+        target = "respite" if "respite" in masked else ("shelter" if "shelter" in masked else None)
+        if target is not None and cool_sources:
+            try:
+                masked[target] = pd_engine.concat([masked[target]] + cool_sources)
+                logger.info(f"[WEATHER] Extreme heat — cooling refuge + water added to {target} pool")
+            except Exception:
+                import pandas as pd
+                def _h(d):
+                    return d.to_pandas() if hasattr(d, "to_pandas") else d
+                masked[target] = pd.concat([_h(masked[target])] + [_h(c) for c in cool_sources])
+
     return masked
 
 

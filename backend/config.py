@@ -28,6 +28,8 @@ GTFS_STOPS_TXT  = DATA_DIR / "stops.txt"
 YOUTH_SPACES_CSV = DATA_DIR / "youth_spaces.csv"
 LIBRARIES_CSV    = DATA_DIR / "libraries.csv"
 RESPITE_CSV      = DATA_DIR / "respite_sites.csv"
+# Hospitals — surfaced on the kiosk crisis screen for medical emergencies
+HOSPITALS_CSV    = DATA_DIR / "hospitals.csv"
 # Telemetry shadow census
 TELEMETRY_CSV    = DATA_DIR / "daily_telemetry.csv"
 

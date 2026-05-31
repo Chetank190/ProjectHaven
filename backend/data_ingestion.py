@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import (
     EngineMode, SHELTERS_CSV, REHAB_CSV, FOOD_CSV, HYGIENE_CSV,
     GRASSROOTS_CSV, OSM_JSON, GTFS_STOPS_TXT, SHELTER_CKAN_URL,
-    YOUTH_SPACES_CSV, LIBRARIES_CSV, RESPITE_CSV,
+    YOUTH_SPACES_CSV, LIBRARIES_CSV, RESPITE_CSV, HOSPITALS_CSV,
     CKAN_STARTUP_TIMEOUT, CKAN_HYDRATE_TIMEOUT,
     WEATHER_FEED_URL, WEATHER_TIMEOUT,
 )
@@ -74,6 +74,15 @@ def load_all(mode: EngineMode = EngineMode.GPU) -> tuple[dict, float]:
         if "occupancy_ratio" not in df.columns:
             df["occupancy_ratio"] = 0.5
         datasets[key] = df
+
+    # Hospitals — optional, non-fatal if the file is missing. Used only by the
+    # kiosk crisis screen (medical emergencies), never by the KNN solver.
+    try:
+        if HOSPITALS_CSV.exists():
+            hospitals = pd_engine.read_csv(HOSPITALS_CSV)
+            datasets["hospitals"] = _standardize_coords(hospitals)
+    except Exception as e:
+        logger.warning(f"hospitals load failed ({e}), skipping")
 
     datasets["osm"] = _load_osm(pd_engine)
     datasets["stops"] = pd_engine.read_csv(

@@ -9,6 +9,7 @@ export interface SpeechState {
   isListening:     boolean;
   isRecording:     boolean;
   isSpeaking:      boolean;
+  muted:           boolean;   // global TTS mute — shared across all useSpeech() instances
   transcript:      string;   // live: interim + final (for display)
   transcriptFinal: string;   // confirmed-final only (for logic — use this in eligibility)
 }
@@ -21,6 +22,8 @@ export interface SpeechControls {
   transcribeAudio:  (blob: Blob) => Promise<string | null>;
   speak:            (text: string, onEnd?: () => void) => void;
   stopSpeaking:     () => void;
+  toggleMute:       () => void;
+  setMuted:         (v: boolean) => void;
   clearTranscript:  () => void;
 }
 
@@ -32,12 +35,36 @@ if (typeof window !== 'undefined') {
   window.speechSynthesis.addEventListener('voiceschanged', load);
 }
 
+// ── Shared TTS mute ──────────────────────────────────────────────────────────
+// One toggle controls every useSpeech() instance (KioskPage, EligibilityFlow,
+// and KioskItinerary each create their own). Muted utterances are still spoken
+// at volume 0, so onstart/onend fire with identical timing and the flows that
+// depend on them (eligibility advancing after a question, etc.) are unaffected.
+let _ttsMuted = false;
+const _muteSubs = new Set<(v: boolean) => void>();
+function _setTtsMuted(v: boolean) {
+  _ttsMuted = v;
+  // Toggling on kills whatever is currently playing.
+  if (typeof window !== 'undefined' && v) window.speechSynthesis.cancel();
+  _muteSubs.forEach(fn => fn(v));
+}
+
 export function useSpeech(): SpeechState & SpeechControls {
   const [isListening,     setListening]     = useState(false);
   const [isRecording,     setRecording]     = useState(false);
   const [isSpeaking,      setSpeaking]      = useState(false);
+  const [muted,           setMutedState]    = useState(_ttsMuted);
   const [transcript,      setTranscript]    = useState('');
   const [transcriptFinal, setTranscriptFinal] = useState('');
+
+  // Subscribe to the shared mute flag so every instance re-renders together.
+  useEffect(() => {
+    const sub = (v: boolean) => setMutedState(v);
+    _muteSubs.add(sub);
+    return () => { _muteSubs.delete(sub); };
+  }, []);
+  const toggleMute = useCallback(() => _setTtsMuted(!_ttsMuted), []);
+  const setMuted   = useCallback((v: boolean) => _setTtsMuted(v), []);
 
   const recognitionRef       = useRef<SpeechRecognition | null>(null);
   const mediaRecRef          = useRef<MediaRecorder | null>(null);
@@ -287,6 +314,9 @@ export function useSpeech(): SpeechState & SpeechControls {
     // setTimeout(0) avoids Chrome cancel()+speak() same-tick race.
     speakTimerRef.current = setTimeout(() => {
       speakTimerRef.current = null;
+      // Re-check mute at speak time: volume 0 keeps onstart/onend timing intact
+      // while staying silent, even if mute was toggled during this tick.
+      utt.volume = _ttsMuted ? 0 : 1;
       window.speechSynthesis.speak(utt);
     }, 0);
   }, []);
@@ -306,9 +336,9 @@ export function useSpeech(): SpeechState & SpeechControls {
   }, []);
 
   return {
-    isListening, isRecording, isSpeaking,
+    isListening, isRecording, isSpeaking, muted,
     transcript, transcriptFinal,
     startListening, stopListening, startRecording, stopRecording, transcribeAudio,
-    speak, stopSpeaking, clearTranscript,
+    speak, stopSpeaking, toggleMute, setMuted, clearTranscript,
   };
 }

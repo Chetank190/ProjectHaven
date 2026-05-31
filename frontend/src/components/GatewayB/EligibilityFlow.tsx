@@ -1,11 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSpeech } from '../shared/useSpeech';
 import { VoiceOrb }  from './VoiceOrb';
+import { MuteButton } from '../shared/MuteButton';
 import { VOICE_ELIGIBILITY_WAIT_SEC } from '../../config';
 import { cLog, cWarn } from '../../lib/clientLog';
 
 interface Props {
   questions:  string[];
+  heardText?: string;
   onComplete: (answers: Record<string, boolean | string | null>) => void;
   onSkip:     () => void;
   onType:     () => void;
@@ -61,10 +63,11 @@ function parseAnswer(question: string, answer: string): { key: string; value: st
   return { key: 'unknown', value: null };
 }
 
-export function EligibilityFlow({ questions, onComplete, onSkip, onType }: Props) {
+export function EligibilityFlow({ questions, heardText, onComplete, onSkip, onType }: Props) {
   const {
     speak, startListening, stopListening, stopSpeaking,
     transcript, transcriptFinal, clearTranscript,
+    muted, toggleMute,
   } = useSpeech();
 
   const [idx,       setIdx]       = useState(0);
@@ -185,6 +188,7 @@ export function EligibilityFlow({ questions, onComplete, onSkip, onType }: Props
           Question {idx + 1} of {questions.length}
         </span>
         <div className="flex items-center gap-2">
+          <MuteButton muted={muted} onToggle={toggleMute} />
           <button
             tabIndex={-1}
             onClick={() => {
@@ -207,6 +211,17 @@ export function EligibilityFlow({ questions, onComplete, onSkip, onType }: Props
           </button>
         </div>
       </div>
+
+      {/* ── What the kiosk heard ── */}
+      {heardText && (
+        <div className="mb-3 flex items-start gap-2 px-1">
+          <span className="text-xs mt-0.5">🗣️</span>
+          <p className="text-sm leading-snug" style={{ color: 'rgba(114,200,226,0.55)' }}>
+            <span className="uppercase tracking-wide text-xs font-semibold mr-1" style={{ color: 'rgba(114,200,226,0.4)' }}>You said:</span>
+            “{heardText}”
+          </p>
+        </div>
+      )}
 
       {/* ── Question card ── */}
       <div className="rounded-2xl px-5 py-4 mb-2"
