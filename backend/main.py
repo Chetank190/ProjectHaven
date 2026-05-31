@@ -319,7 +319,7 @@ def _call_asr(base_url: str, audio_data: bytes, content_type: str) -> str:
     resp = _req.post(
         f"{base_url}/v1/audio/transcriptions",
         files={"file": ("recording", audio_data, content_type or "audio/webm")},
-        data={"language": "en"},
+        data={"language": "en-US"},
         headers={"Authorization": f"Bearer {ngc_key}"},
         timeout=ASR_NIM_TIMEOUT,
     )
