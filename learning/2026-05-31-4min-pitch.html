@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Haven Matrix — 4-Minute Pitch</title>
+<style>
+  :root {
+    --bg:#0A1E2E; --bg2:#0D2436; --bg3:#061825;
+    --ocean300:#72C8E2; --ocean400:#38AED2; --ocean500:#1A93BB; --ocean600:#1A7A9A;
+    --sage:#3A8A71; --sage300:#80C0AA;
+    --amber:#FBBF24; --amber600:#B45309;
+    --ink:rgba(255,255,255,0.92); --muted:rgba(255,255,255,0.55); --faint:rgba(255,255,255,0.32);
+    --card:rgba(255,255,255,0.04); --line:rgba(56,174,210,0.20);
+    --green:#3A8A71; --yellow:#D97706; --red:#EF4444;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:'Inter',system-ui,-apple-system,sans-serif;
+    background:linear-gradient(160deg,var(--bg) 0%,var(--bg2) 55%,var(--bg3) 100%);
+    color:var(--ink); -webkit-font-smoothing:antialiased; line-height:1.55;
+    padding:0 0 80px;
+  }
+  .wrap { max-width:1080px; margin:0 auto; padding:0 24px; }
+  header { padding:56px 0 24px; text-align:center; }
+  .badge { display:inline-block; font-size:12px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--ocean300); border:1px solid var(--line); border-radius:999px; padding:6px 16px; margin-bottom:18px; }
+  h1 { font-size:2.4rem; font-weight:700; margin:0 0 8px; letter-spacing:-.02em; }
+  h1 .accent { color:var(--ocean400); }
+  .sub { color:var(--muted); font-size:1.05rem; max-width:660px; margin:0 auto; }
+  .runtime { display:inline-flex; align-items:baseline; gap:8px; margin-top:16px;
+    font-family:ui-monospace,monospace; color:var(--ocean300); font-size:.85rem; letter-spacing:.06em; }
+  .runtime b { font-size:1.6rem; color:var(--ink); font-weight:700; }
+  h2 { font-size:1.35rem; margin:48px 0 4px; font-weight:600; }
+  h2 .num { color:var(--ocean400); font-variant-numeric:tabular-nums; margin-right:10px; }
+  .lead { color:var(--muted); margin:0 0 20px; }
+  section { scroll-margin-top:20px; }
+
+  /* ── timeline strip ── */
+  .timeline { display:flex; gap:6px; margin-top:8px; }
+  .seg { border-radius:12px; padding:14px 12px; background:var(--card); border:1px solid var(--line);
+    position:relative; overflow:hidden; min-width:0; }
+  .seg .bar { position:absolute; left:0; bottom:0; height:4px; width:100%; }
+  .seg .lbl { font-size:.74rem; text-transform:uppercase; letter-spacing:.07em; color:var(--ocean300);
+    font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .seg .dur { font-size:1.15rem; font-weight:700; margin-top:3px; font-variant-numeric:tabular-nums; }
+  .seg .dsc { font-size:.72rem; color:var(--faint); margin-top:2px; }
+
+  /* ── metrics row ── */
+  .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:8px; }
+  .metric { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 14px; text-align:center; }
+  .metric .v { font-size:1.5rem; font-weight:800; letter-spacing:-.01em; line-height:1.1; }
+  .metric .v.ocean { color:var(--ocean300); }
+  .metric .v.sage  { color:var(--sage300); }
+  .metric .v.amber { color:var(--amber); }
+  .metric .k { font-size:.72rem; color:var(--muted); margin-top:6px; text-transform:uppercase; letter-spacing:.06em; }
+
+  /* ── architecture: layered stack ── */
+  .layer { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; margin-top:12px; }
+  .layer .lt { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:var(--faint); margin-bottom:10px; }
+  .gw { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .gwcard { border-radius:12px; padding:14px; }
+  .gwa { background:linear-gradient(135deg,#0F4259,#1A7A9A); }
+  .gwb { background:linear-gradient(135deg,#155F79,#1A93BB); }
+  .gwcard b { display:block; font-size:.95rem; }
+  .gwcard span { font-size:.8rem; color:rgba(255,255,255,0.72); }
+  .arrow { text-align:center; color:var(--ocean400); font-size:1.2rem; margin:6px 0 0; }
+
+  /* pipeline (guarded stages) */
+  .pipe { display:flex; flex-wrap:wrap; align-items:stretch; gap:0; margin-top:4px;
+    background:rgba(255,255,255,0.02); border:1px dashed rgba(56,174,210,0.35); border-radius:14px; padding:8px; }
+  .stage { flex:1; min-width:104px; padding:12px 10px; text-align:center; position:relative; }
+  .stage + .stage::before { content:'→'; position:absolute; left:-8px; top:50%; transform:translateY(-50%);
+    color:var(--ocean400); font-size:1rem; }
+  .stage .m { font-weight:600; font-size:.84rem; }
+  .stage .d { font-size:.72rem; color:var(--faint); margin-top:2px; }
+  .stage.guard .m { color:var(--amber); }
+  .stage.gpu .m   { color:var(--sage300); }
+
+  /* unified-memory + LLM tiers side by side */
+  .twocol { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
+  @media (max-width:720px){ .twocol{ grid-template-columns:1fr; } .gw{ grid-template-columns:1fr; } }
+  .membar { border:1.5px dashed rgba(56,174,210,0.4); border-radius:12px; padding:10px; display:flex; gap:8px; flex-wrap:wrap; }
+  .memblock { flex:1; min-width:90px; border-radius:9px; padding:11px 8px; text-align:center; font-size:.78rem; }
+  .mb1 { background:linear-gradient(135deg,#0F4259,#1A7A9A); }
+  .mb2 { background:linear-gradient(135deg,#1D4238,#2E6E59); }
+  .mb3 { background:linear-gradient(135deg,#155F79,#1A93BB); }
+  .memcap { text-align:center; color:var(--ocean300); font-size:.76rem; margin-top:10px; letter-spacing:.04em; }
+  .tiers { list-style:none; margin:0; padding:0; counter-reset:tier; }
+  .tiers li { display:flex; gap:10px; align-items:flex-start; padding:7px 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:.84rem; }
+  .tiers li:last-child { border-bottom:0; }
+  .tiers li::before { counter-increment:tier; content:counter(tier); flex:0 0 22px; height:22px; border-radius:50%;
+    background:rgba(26,147,187,0.18); color:var(--ocean300); font-weight:700; font-size:.72rem;
+    display:flex; align-items:center; justify-content:center; border:1px solid var(--line); }
+  .tiers .fall::before { content:'↩'; background:rgba(255,255,255,0.06); color:var(--faint); }
+  .tiers code { font-family:ui-monospace,monospace; color:var(--ocean300); font-size:.78rem; }
+  .panel-h { font-size:.82rem; color:var(--ink); font-weight:600; margin:0 0 8px; }
+
+  /* ── script cards ── */
+  .scripts { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:8px; }
+  @media (max-width:720px){ .scripts{ grid-template-columns:1fr; } }
+  .scard { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:20px 22px; position:relative; }
+  .scard.full { grid-column:1 / -1; }
+  .scard .hd { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .scard .ttl { font-size:1.02rem; font-weight:600; }
+  .scard .clock { font-family:ui-monospace,monospace; font-size:.74rem; color:var(--ocean300);
+    border:1px solid var(--line); border-radius:999px; padding:4px 11px; white-space:nowrap; }
+  .scard p { font-size:.9rem; color:var(--muted); margin:0 0 10px; }
+  .scard p:last-child { margin-bottom:0; }
+  .scard .q { color:var(--ocean300); font-style:italic; }
+  .scard b.k { color:var(--ink); }
+  .tag { display:inline-block; font-size:.68rem; text-transform:uppercase; letter-spacing:.07em;
+    color:var(--sage300); background:rgba(58,138,113,0.16); border:1px solid rgba(58,138,113,0.4);
+    border-radius:6px; padding:2px 8px; margin-right:6px; }
+
+  /* ── footer / audience ── */
+  .pills { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
+  .pill { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:13px 15px;
+    font-size:.88rem; color:var(--muted); flex:1; min-width:200px; }
+  .pill b { color:var(--ocean300); display:block; margin-bottom:3px; font-size:.8rem; }
+  .closer { border-left:3px solid var(--amber); background:rgba(251,191,36,0.07);
+    padding:16px 20px; border-radius:0 12px 12px 0; margin-top:24px; font-size:1.02rem; color:var(--ink); }
+  .closer b { color:var(--amber); }
+  footer { text-align:center; color:var(--faint); font-size:.8rem; margin-top:48px; }
+  .legend { display:flex; gap:18px; justify-content:center; flex-wrap:wrap; margin-top:14px; font-size:.78rem; color:var(--muted); }
+  .legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:6px; vertical-align:middle; }
+  @media (prefers-reduced-motion: no-preference) {
+    .seg .bar { transition:width 1s cubic-bezier(.2,.7,.2,1); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="badge">NVIDIA Spark Hack Toronto · Public Services</div>
+    <h1>Haven Matrix — <span class="accent">4-Minute Pitch</span></h1>
+    <p class="sub">A dual-gateway, GPU-accelerated social-services triage system for Toronto.
+      One page: the run-of-show, the architecture, the numbers — and the full spoken script.</p>
+    <div class="runtime">TOTAL RUNTIME&nbsp; <b>4:00</b> &nbsp;· ~525 words · 5 segments</div>
+  </header>
+
+  <!-- TIMELINE -->
+  <section>
+    <h2><span class="num">01</span>Run of show</h2>
+    <p class="lead">Five beats, paced to the clock. Bar width is proportional to time.</p>
+    <div class="timeline">
+      <div class="seg" style="flex:30">
+        <div class="lbl">Team</div><div class="dur">0:30</div><div class="dsc">who we are</div>
+        <i class="bar" style="width:100%;background:var(--ocean600)"></i>
+      </div>
+      <div class="seg" style="flex:30">
+        <div class="lbl">Pitch</div><div class="dur">0:30</div><div class="dsc">what · how · why</div>
+        <i class="bar" style="width:100%;background:var(--ocean500)"></i>
+      </div>
+      <div class="seg" style="flex:60">
+        <div class="lbl">In action</div><div class="dur">1:00</div><div class="dsc">I/O · live · best part</div>
+        <i class="bar" style="width:100%;background:var(--ocean400)"></i>
+      </div>
+      <div class="seg" style="flex:90">
+        <div class="lbl">Architecture</div><div class="dur">1:30</div><div class="dsc">stack · design · challenges</div>
+        <i class="bar" style="width:100%;background:var(--sage)"></i>
+      </div>
+      <div class="seg" style="flex:30">
+        <div class="lbl">Close</div><div class="dur">0:30</div><div class="dsc">who it's for</div>
+        <i class="bar" style="width:100%;background:var(--amber600)"></i>
+      </div>
+    </div>
+  </section>
+
+  <!-- METRICS -->
+  <section>
+    <h2><span class="num">02</span>The numbers</h2>
+    <p class="lead">Every figure is measured on the hardware or validated from Toronto open data.</p>
+    <div class="metrics">
+      <div class="metric"><div class="v ocean">128 GB</div><div class="k">unified memory</div></div>
+      <div class="metric"><div class="v sage">&lt; 10 ms</div><div class="k">GPU KNN solve</div></div>
+      <div class="metric"><div class="v ocean">Nemotron-30B</div><div class="k">local LLM</div></div>
+      <div class="metric"><div class="v amber">~97%</div><div class="k">shelter occupancy</div></div>
+      <div class="metric"><div class="v amber">~4,000</div><div class="k">intake calls / day</div></div>
+      <div class="metric"><div class="v ocean">7 + 9,255</div><div class="k">matrices · TTC stops</div></div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section>
+    <h2><span class="num">03</span>How it's built</h2>
+    <p class="lead">Voice in → deterministic compile → constraint-aware GPU solve → care route out.
+      Every stage has a fallback; the system never hard-fails.</p>
+
+    <div class="layer">
+      <div class="lt">Presentation · React + Vite + TypeScript</div>
+      <div class="gw">
+        <div class="gwcard gwa"><b>Gateway A — Caseworker</b><span>text / voice · JWT auth · itinerary + handoff script</span></div>
+        <div class="gwcard gwb"><b>Gateway B — Kiosk</b><span>voice-only · eligibility by TTS · reservation code</span></div>
+      </div>
+    </div>
+    <div class="arrow">↓</div>
+
+    <div class="layer">
+      <div class="lt">FastAPI backend · guarded request pipeline</div>
+      <div class="pipe">
+        <div class="stage guard"><div class="m">PII scrub</div><div class="d">6 patterns</div></div>
+        <div class="stage guard"><div class="m">Injection</div><div class="d">block 400</div></div>
+        <div class="stage guard"><div class="m">Guardrails</div><div class="d">NeMo</div></div>
+        <div class="stage guard"><div class="m">Crisis gate</div><div class="d">988 / 911</div></div>
+        <div class="stage"><div class="m">LLM compile</div><div class="d">→ JSON</div></div>
+        <div class="stage"><div class="m">Mask</div><div class="d">ID · sober · group</div></div>
+        <div class="stage gpu"><div class="m">cuML KNN</div><div class="d">+ scoring</div></div>
+        <div class="stage gpu"><div class="m">Transit</div><div class="d">GTFS join</div></div>
+      </div>
+    </div>
+    <div class="arrow">↓</div>
+
+    <div class="twocol">
+      <div class="layer" style="margin-top:0">
+        <p class="panel-h">LLM — deterministic compiler, 4-tier fallback</p>
+        <ul class="tiers">
+          <li>NVIDIA cloud NIM — <code>Gemma 3n</code> (if key)</li>
+          <li>llama.cpp — <code>Nemotron-30B</code> :30000</li>
+          <li>local NIM — <code>Gemma 3n E4B</code> :8001</li>
+          <li class="fall">regex fallback — <code>offline, zero-network</code></li>
+        </ul>
+      </div>
+      <div class="layer" style="margin-top:0">
+        <p class="panel-h">128 GB unified memory — no PCIe bottleneck</p>
+        <div class="membar">
+          <div class="memblock mb1">Nemotron-30B</div>
+          <div class="memblock mb2">7 cuDF matrices</div>
+          <div class="memblock mb3">Parakeet ASR</div>
+        </div>
+        <div class="memcap">all co-resident · zero-copy cuDF → cuML · CPU path runs in parallel for a live benchmark</div>
+      </div>
+    </div>
+
+    <div class="pills" style="margin-top:14px">
+      <div class="pill"><b>PCIe bottleneck</b>One address space — data + model co-resident, zero-copy.</div>
+      <div class="pill"><b>Offline demo</b>Pre-cached data + regex / Web Speech fallbacks.</div>
+      <div class="pill"><b>Prompt injection</b>Deterministic block before the model runs.</div>
+      <div class="pill"><b>Privacy</b>One scrub chokepoint · no audio leaves device.</div>
+    </div>
+  </section>
+
+  <!-- SCRIPT -->
+  <section>
+    <h2><span class="num">04</span>The script</h2>
+    <p class="lead">Read top-to-bottom. Swap the <b>[Name — Role]</b> placeholders before presenting.</p>
+    <div class="scripts">
+
+      <div class="scard">
+        <div class="hd"><div class="ttl">1 · Team intro</div><div class="clock">0:00–0:30</div></div>
+        <p>Hi — we're the team behind <b class="k">Haven Matrix</b>. I'm <b class="k">[Name — Role]</b>, with me are <b class="k">[Name — Role]</b> and <b class="k">[Name — Role]</b>.</p>
+        <p>We came to Spark Hack with one question: what's the most <i>human</i> problem we could put a GPU behind? Not another chatbot — something that helps a real person on a cold night in Toronto find a safe place to sleep.</p>
+      </div>
+
+      <div class="scard">
+        <div class="hd"><div class="ttl">2 · Elevator pitch</div><div class="clock">0:30–1:00</div></div>
+        <p><b class="k">What:</b> a dual-gateway triage that routes unhoused people — and the caseworkers helping them — to the right Toronto services, in real time.</p>
+        <p><b class="k">How:</b> you speak; a local model compiles your needs into JSON; cuML runs a constraint-aware nearest-neighbour search on 128 GB — a ranked route in under a second.</p>
+        <p><b class="k">Why:</b> shelters run ~97% full; Central Intake fields ~4,000 calls a day. People in crisis can't navigate hundreds of fragmented services. We do it for them.</p>
+      </div>
+
+      <div class="scard full">
+        <div class="hd"><div class="ttl">3 · It in action</div><div class="clock">1:00–2:00</div></div>
+        <p><b class="k">Gateway A — caseworkers.</b> They speak a client's situation — <span class="q">"man, mid-forties, no ID, needs a bed and a hot meal tonight."</span> In under a second: a ranked itinerary — nearest shelter with beds free, walk times, live occupancy, a transit badge — plus a warm-handoff phone script they read straight to the shelter.</p>
+        <p><b class="k">Gateway B — a public kiosk, voice only.</b> Tap a glowing orb, speak. It asks up to three eligibility questions out loud, you tap to confirm each, and it talks back a walking route and a reservation code. No keyboard. No ID. No app.</p>
+        <p><span class="tag">live</span>A GPU-vs-CPU benchmark on every request · a shelter-capacity ticker · weather-aware routing that folds in warming centres on a cold alert.</p>
+        <p><span class="tag">best part</span>A <b class="k">crisis gate fires before the AI ever runs</b> — self-harm → 988; a medical emergency → 911 with the nearest ER on screen. And all of it keeps working offline.</p>
+      </div>
+
+      <div class="scard full">
+        <div class="hd"><div class="ttl">4 · How we built it</div><div class="clock">2:00–3:30</div></div>
+        <p><b class="k">Stack:</b> React + Vite + TypeScript front end; FastAPI back end; RAPIDS cuDF/cuML on GPU; Nemotron-30B via llama.cpp with a Gemma NIM and NVIDIA cloud behind it; Parakeet ASR; NeMo Guardrails; SQLite for cases, auth and reservations.</p>
+        <p><b class="k">Principle:</b> the LLM is a <b class="k">deterministic compiler, not a decision-maker</b>. Every model call has a strict Pydantic schema and a regex fallback; every GPU call has a pandas/scikit-learn fallback. Four-tier model chain, CKAN-to-cache data chain — it never hard-fails.</p>
+        <p><b class="k">Flow:</b> PII scrub → injection check → guardrails → crisis gate → LLM compile → constraint masking (ID, sobriety, gender, group) → cuML solve + composite scoring → TTC transit join.</p>
+        <p><b class="k">The bet:</b> 128 GB unified memory holds all seven matrices <i>and</i> the model in one address space — no PCIe serialization. The CPU path runs in parallel, so the on-screen benchmark is a live measurement. Hardest parts: prompt injection (blocked before the model), privacy (one scrub chokepoint, no audio off-device), and a voice UI that never cuts vulnerable people off mid-sentence.</p>
+      </div>
+
+      <div class="scard full">
+        <div class="hd"><div class="ttl">5 · Closing</div><div class="clock">3:30–4:00</div></div>
+        <p>Who's it for? City caseworkers and street outreach teams. The 211 network. Shelter operators — live capacity plus an anonymized shadow census of demand. Public health. And, through the kiosk, unhoused people themselves, with no barrier to entry.</p>
+        <p>Haven Matrix turns a GPU into a lifeline.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- AUDIENCE / CLOSER -->
+  <section>
+    <h2><span class="num">05</span>Who can use it</h2>
+    <div class="pills">
+      <div class="pill"><b>Caseworkers &amp; outreach</b>Speak a situation → ranked referral + handoff script.</div>
+      <div class="pill"><b>Unhoused people</b>Voice kiosk — no literacy, phone, ID or app needed.</div>
+      <div class="pill"><b>211 &amp; shelter operators</b>Route API · live capacity · demand telemetry.</div>
+      <div class="pill"><b>City &amp; public health</b>Anonymized shadow census of unmet need.</div>
+    </div>
+    <div class="closer">
+      That benchmark number on screen? It isn't a claim — it's a <b>measurement, from this hardware, right now.</b>
+    </div>
+  </section>
+
+  <footer>
+    Haven Matrix · NVIDIA Spark Hack Toronto · Public Services Track · self-contained presenter one-pager
+    <div class="legend">
+      <span><i style="background:var(--amber)"></i>guard stage (pre-LLM)</span>
+      <span><i style="background:var(--sage300)"></i>GPU stage</span>
+      <span><i style="background:var(--ocean400)"></i>core flow</span>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>
