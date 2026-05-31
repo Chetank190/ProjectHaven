@@ -4,8 +4,8 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 3000,
-    strictPort: true,
+    port: 3001,
+    strictPort: true,   // fail loudly instead of silently drifting to a random port
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
