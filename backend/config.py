@@ -141,6 +141,7 @@ JSON schema (all fields required):
   "needs_youth_service": <true|false>,
   "needs_library":       <true|false>,
   "needs_respite":       <true|false>,
+  "needs_medical":       <true|false>,
   "sector":              <"youth"|"adult"|"family"|"any">,
   "has_id":              <true|false|null>,
   "sobriety_status":     <"sober"|"using"|null>,
@@ -159,6 +160,10 @@ Field rules:
 - needs_library: true if person needs internet access, computers, digital forms, daytime respite in a library
 - needs_respite: true if person needs a warming centre, daytime low-barrier shelter, or somewhere safe and
   warm — including being cold/freezing, wanting to stay or keep warm, or to get out of the cold
+- needs_medical: true if person describes a NON-emergency health concern — feeling sick or ill, wanting to
+  see a doctor or nurse, a fever, an infection, a wound or injury, ongoing pain, or needing medication or a
+  prescription. Do NOT set this for life-threatening emergencies (chest pain, can't breathe, overdose,
+  stroke, unconscious) — those are handled separately before you ever see the text.
 - sector: infer from age/demographic; default to "any"
 - has_id: only set if explicitly mentioned; otherwise null
 - sobriety_status: only set if explicitly mentioned; otherwise null
@@ -172,10 +177,13 @@ Disambiguation — the word "warm" is ambiguous; classify by what it describes:
 
 Examples (input → output):
 "I am very cold, I need a place to stay warm" →
-{"needs_shelter": true, "needs_rehab": false, "needs_food": false, "needs_supplies": false, "needs_hygiene": false, "needs_youth_service": false, "needs_library": false, "needs_respite": true, "sector": "any", "has_id": null, "sobriety_status": null, "group_size": null}
+{"needs_shelter": true, "needs_rehab": false, "needs_food": false, "needs_supplies": false, "needs_hygiene": false, "needs_youth_service": false, "needs_library": false, "needs_respite": true, "needs_medical": false, "sector": "any", "has_id": null, "sobriety_status": null, "group_size": null}
 
 "I am very hungry, I need something warm to eat" →
-{"needs_shelter": false, "needs_rehab": false, "needs_food": true, "needs_supplies": false, "needs_hygiene": false, "needs_youth_service": false, "needs_library": false, "needs_respite": false, "sector": "any", "has_id": null, "sobriety_status": null, "group_size": null}
+{"needs_shelter": false, "needs_rehab": false, "needs_food": true, "needs_supplies": false, "needs_hygiene": false, "needs_youth_service": false, "needs_library": false, "needs_respite": false, "needs_medical": false, "sector": "any", "has_id": null, "sobriety_status": null, "group_size": null}
+
+"I feel sick and I think I have a fever, I need to see a doctor" →
+{"needs_shelter": false, "needs_rehab": false, "needs_food": false, "needs_supplies": false, "needs_hygiene": false, "needs_youth_service": false, "needs_library": false, "needs_respite": false, "needs_medical": true, "sector": "any", "has_id": null, "sobriety_status": null, "group_size": null}
 """
 
 NIM_BRIEFING_PROMPT = """You are writing a shift briefing for a Toronto social services outreach team.

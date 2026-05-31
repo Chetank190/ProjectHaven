@@ -9,6 +9,7 @@ export interface NeedsPayload {
   needs_youth_service: boolean;
   needs_library:       boolean;
   needs_respite:       boolean;
+  needs_medical:       boolean;
   sector:              'youth' | 'adult' | 'family' | 'any';
   has_id:              boolean | null;
   sobriety_status:     'sober' | 'using' | null;
@@ -135,9 +136,10 @@ export interface KioskRouteRequest {
 }
 
 export interface KioskRouteResponse {
-  itinerary:    Itinerary;
-  tts_script:   string;
-  gpu_solve_ms: number;
+  itinerary:          Itinerary;
+  tts_script:         string;
+  gpu_solve_ms:       number;
+  medical_facilities?: Hospital[];
 }
 
 export interface NearbyService {

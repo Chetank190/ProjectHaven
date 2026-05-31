@@ -250,6 +250,16 @@ export function KioskPage() {
         .filter(([, results]) => results.length > 0)
         .map(([pillar, results]) => ({ pillar, name: results[0].name, km: results[0].distance_km }));
       cLog('route.result', { pillars: summary.map(s => s.pillar), top: summary, solve_ms: r.data.gpu_solve_ms });
+      // Pure non-emergency medical (facilities but no routed pillars): KioskItinerary
+      // is not rendered, so it won't auto-speak. Voice the calm guidance here instead.
+      const meds = r.data.medical_facilities ?? [];
+      const hasItinerary = Object.values(r.data.itinerary).some(arr => arr.length > 0);
+      if (meds.length > 0 && !hasItinerary) {
+        speak(
+          'Here are some clinics and urgent care options near you, sorted by distance. ' +
+          'If this becomes an emergency, please call 9-1-1.'
+        );
+      }
       setKioskState('speaking');
     } catch {
       const msg = "I'm sorry, I wasn't able to find anything right now. You can also call 2-1-1 for help.";
@@ -492,8 +502,23 @@ export function KioskPage() {
 
   // ── Results screen — wrap KioskItinerary with a persistent location chip ──────
   if (kioskState === 'speaking' && routeResult) {
+    const meds = routeResult.medical_facilities ?? [];
+    const hasMeds = meds.length > 0;
+    const hasItinerary = Object.values(routeResult.itinerary).some(arr => arr.length > 0);
+    // Show the routed itinerary unless this is a pure non-emergency medical request
+    // (facilities but no pillars) — in that case the 211 empty-state would be off-tone.
+    const showItinerary = hasItinerary || !hasMeds;
+    const resetToIdle = () => {
+      setKioskState('idle');
+      setRouteResult(null);
+      setSessionId(null);
+      setLastAnswers({});
+      setLastTranscript('');
+    };
     return (
-      <div className="relative">
+      // Dark base so the (reused, white-text) medical cards stay readable above
+      // KioskItinerary — the body background is light (#F5F7F8).
+      <div className="relative" style={{ minHeight: '100vh', background: '#0A1E2E' }}>
         {/* Floating location chip — more prominent here since re-route is the key action */}
         <button
           onClick={() => openHubSelect('speaking')}
@@ -514,22 +539,44 @@ export function KioskPage() {
 
         <MuteButton muted={muted} onToggle={toggleMute} className="fixed top-4 right-4 z-50" />
 
-        <KioskItinerary
-          itinerary={routeResult.itinerary}
-          ttsScript={routeResult.tts_script}
-          heardText={lastTranscript}
-          originLat={hubCoords[0]}
-          originLon={hubCoords[1]}
-          hubName={hubName}
-          onReserve={handleReserve}
-          onReset={() => {
-            setKioskState('idle');
-            setRouteResult(null);
-            setSessionId(null);
-            setLastAnswers({});
-            setLastTranscript('');
-          }}
-        />
+        {/* Non-emergency health concern → nearest clinics / urgent care, sorted by distance */}
+        {hasMeds && (
+          <div className="px-6 pt-20 pb-4 max-w-lg mx-auto w-full">
+            <h2 className="text-2xl font-light mb-1 text-center" style={{ color: 'rgba(114,200,226,0.95)' }}>
+              🩺 Nearby clinics &amp; urgent care
+            </h2>
+            <p className="text-sm font-light mb-5 text-center" style={{ color: 'rgba(255,200,100,0.85)' }}>
+              If this becomes an emergency, call 9-1-1.
+            </p>
+            <CrisisHospitals hospitals={meds} />
+          </div>
+        )}
+
+        {showItinerary ? (
+          <KioskItinerary
+            itinerary={routeResult.itinerary}
+            ttsScript={routeResult.tts_script}
+            heardText={lastTranscript}
+            originLat={hubCoords[0]}
+            originLon={hubCoords[1]}
+            hubName={hubName}
+            onReserve={handleReserve}
+            onReset={resetToIdle}
+          />
+        ) : (
+          <div className="px-6 pb-12 max-w-lg mx-auto w-full flex justify-center">
+            <button
+              onClick={resetToIdle}
+              className="text-lg font-light px-8 py-4 rounded-2xl transition-all"
+              style={{
+                color: 'rgba(114,200,226,0.7)',
+                border: '1px solid rgba(26,147,187,0.3)',
+                background: 'rgba(26,147,187,0.06)',
+              }}>
+              Tap to start again
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -558,6 +605,13 @@ export function KioskPage() {
           {crisisText}
         </p>
 
+        {/* Medical emergency: strong imperative above the call button */}
+        {isMedical && (
+          <p className="text-xl font-semibold mb-3 text-center" style={{ color: '#FBBF24' }}>
+            Call 9-1-1 now
+          </p>
+        )}
+
         {/* Tap-to-call the emergency line */}
         <a
           href={`tel:${(crisisHotline ?? '911').replace(/[^0-9+]/g, '')}`}
@@ -569,8 +623,14 @@ export function KioskPage() {
           <span className="text-5xl font-bold" style={{ color: '#FBBF24' }}>{crisisHotline}</span>
         </a>
 
-        {/* Medical emergencies: nearest public ERs + private clinics */}
-        {isMedical && <CrisisHospitals hospitals={crisisHospitals} />}
+        {/* Medical emergencies: nearest public ERs + private clinics (always shown,
+            with a fallback line if hospital data is unavailable) */}
+        {isMedical && (
+          <CrisisHospitals
+            hospitals={crisisHospitals}
+            emptyFallback="Please go to your nearest emergency room as soon as possible."
+          />
+        )}
 
         <button
           onClick={resetCrisis}

@@ -39,6 +39,7 @@ class NeedsPayload(BaseModel):
     needs_youth_service: bool = False
     needs_library:       bool = False
     needs_respite:       bool = False
+    needs_medical:       bool = False
     sector:              str = "any"
     has_id:              bool | None = None
     sobriety_status:     str | None = None
@@ -283,6 +284,7 @@ def _regex_fallback(text: str) -> NeedsPayload:
         needs_youth_service= match(["youth program", "eys", "community centre", "after school", "young person", "teen needs", "youth space", "youth centre"]),
         needs_library=       match(["library", "internet access", "wifi", "computer access", "digital", "online form", "tpl", "print"]),
         needs_respite=       match(["warming centre", "day shelter", "respite", "somewhere warm", "just need to sit", "out of the cold", "daytime shelter"]),
+        needs_medical=       match(["sick", "doctor", "clinic", "urgent care", "fever", "infection", "infected", "medication", "prescription", "injured", "hurt", "pain", "wound", "ill", "nurse", "walk-in", "walk in"]),
         sector=sector,
         has_id=has_id,
         sobriety_status=sobriety,

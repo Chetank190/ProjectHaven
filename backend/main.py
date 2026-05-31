@@ -711,10 +711,18 @@ async def kiosk_route(req: KioskRouteRequest, request: Request):
         session.origin[0], session.origin[1],
     ))
 
+    # Non-emergency health concern → attach nearest medical facilities.
+    # (Acute emergencies never reach here — the crisis gate short-circuits in /kiosk/session.)
+    medical_facilities: list[dict] = []
+    if payload.needs_medical:
+        medical_facilities, _ = nearest_hospitals(session.origin[0], session.origin[1], limit=6)
+        logger.info(f"[{rid}] kiosk needs_medical → {len(medical_facilities)} facilities attached")
+
     return {
-        "itinerary":    itinerary,
-        "tts_script":   build_tts_itinerary_script(itinerary),
-        "gpu_solve_ms": round(gpu_ms, 2),
+        "itinerary":          itinerary,
+        "tts_script":         build_tts_itinerary_script(itinerary),
+        "gpu_solve_ms":       round(gpu_ms, 2),
+        "medical_facilities": medical_facilities,
     }
 
 
@@ -854,23 +862,23 @@ async def nearby_services(lat: float, lon: float, radius_km: float = 2.0, limit:
     }
 
 
-@app.get("/api/v1/hospitals/nearby")
-async def hospitals_nearby(lat: float, lon: float, limit: int = 6):
+def nearest_hospitals(lat: float, lon: float, limit: int = 6) -> tuple[list[dict], int]:
     """
-    Return hospitals nearest to (lat, lon), sorted by distance — public ER sites
-    and private clinics together, each tagged with `type` and `emergency`.
-    Surfaced on the kiosk crisis screen for medical emergencies. No radius cap:
-    in an emergency we always show the closest options, even if far.
+    Return (hospitals, total) nearest to (lat, lon), sorted by walking distance.
+    Public ER sites and private clinics together, each tagged with `type` and
+    `emergency`. No radius cap — in a medical situation we always show the closest
+    options, even if far. Returns ([], 0) if the hospital dataset is unavailable,
+    so callers degrade gracefully rather than raising.
     """
     df = datasets_cpu.get("hospitals") if datasets_cpu else None
     if df is None:
-        raise HTTPException(status_code=503, detail="Hospital data not loaded")
+        return [], 0
 
     import numpy as np
 
     pdf = df.to_pandas() if hasattr(df, "to_pandas") else df
     if pdf.empty:
-        return {"hospitals": [], "total": 0}
+        return [], 0
 
     R = 6371.0
     dlat = np.radians(pdf["lat"].values - lat)
@@ -901,7 +909,21 @@ async def hospitals_nearby(lat: float, lon: float, limit: int = 6):
             "distance_drive_min": max(1, int(round(d / 0.5))),  # ~30 km/h city driving
         })
 
-    return {"hospitals": out[:limit], "total": len(out)}
+    return out[:limit], len(out)
+
+
+@app.get("/api/v1/hospitals/nearby")
+async def hospitals_nearby(lat: float, lon: float, limit: int = 6):
+    """
+    Return hospitals nearest to (lat, lon), sorted by distance — public ER sites
+    and private clinics together, each tagged with `type` and `emergency`.
+    Surfaced on the kiosk crisis screen for medical emergencies. No radius cap:
+    in an emergency we always show the closest options, even if far.
+    """
+    if not datasets_cpu or datasets_cpu.get("hospitals") is None:
+        raise HTTPException(status_code=503, detail="Hospital data not loaded")
+    hospitals, total = nearest_hospitals(lat, lon, limit)
+    return {"hospitals": hospitals, "total": total}
 
 
 @app.post("/api/v1/caseworker/briefing")

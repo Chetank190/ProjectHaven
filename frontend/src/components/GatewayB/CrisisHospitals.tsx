@@ -1,7 +1,12 @@
+import type { ReactNode } from 'react';
 import type { Hospital } from '../../types/api';
 
 interface Props {
   hospitals: Hospital[] | null;   // null = still loading
+  // Rendered instead of nothing when the list loads empty (e.g. hospital data
+  // unavailable). The crisis screen passes a "go to your nearest ER" line so the
+  // emergency screen never shows a blank section.
+  emptyFallback?: ReactNode;
 }
 
 function directionsUrl(lat: number, lon: number): string {
@@ -64,7 +69,7 @@ function HospitalCard({ h }: { h: Hospital }) {
   );
 }
 
-export function CrisisHospitals({ hospitals }: Props) {
+export function CrisisHospitals({ hospitals, emptyFallback }: Props) {
   if (hospitals === null) {
     return (
       <div className="flex flex-col items-center gap-3 py-8">
@@ -79,7 +84,14 @@ export function CrisisHospitals({ hospitals }: Props) {
     );
   }
 
-  if (hospitals.length === 0) return null;
+  if (hospitals.length === 0) {
+    if (!emptyFallback) return null;
+    return (
+      <div className="w-full max-w-lg mx-auto text-center">
+        <p className="text-base font-light" style={{ color: 'rgba(255,255,255,0.7)' }}>{emptyFallback}</p>
+      </div>
+    );
+  }
 
   const ers      = hospitals.filter(h => h.emergency);
   const clinics  = hospitals.filter(h => !h.emergency);

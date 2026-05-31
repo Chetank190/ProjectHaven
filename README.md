@@ -37,12 +37,12 @@ python backend/data_ingestion.py --verify --mode cpu
 # 4. Start FastAPI (port 8000)
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 5. In a new terminal — start React (port 3000)
+# 5. In a new terminal — start React (port 3001)
 cd frontend && npm install && npm run dev
 
 # 6. Open browser
-# Caseworker: http://localhost:3000/caseworker
-# Kiosk:      http://localhost:3000/kiosk  (requires Chrome for voice)
+# Caseworker: http://localhost:3001/caseworker
+# Kiosk:      http://localhost:3001/kiosk  (requires Chrome for voice)
 # Swagger:    http://localhost:8000/docs
 ```
 
@@ -57,7 +57,7 @@ cd frontend && npm install && npm run dev
 **Default:** run **backend + frontend on your Mac**; run **models only on the GX10 GPU** over Tailscale.
 
 ```
-Mac (:3000 frontend, :8000 backend CPU)
+Mac (:3001 frontend, :8000 backend CPU)
     │  NIM_ENDPOINT=http://100.81.85.39:8001/v1
     ▼  Tailscale
 GX10 — docker compose up nim -d  (Gemma 3n on GPU :8001)
@@ -157,7 +157,7 @@ nmcli con delete gx10-3cd8-Hotspot   # delete so it doesn't reconnect on reboot
 
 ### Use the UI from your Mac (default — no port-forward needed)
 
-Backend and frontend run locally on the Mac. Only ensure Tailscale is Connected and GX10 NIM is up. Open http://localhost:3000/caseworker.
+Backend and frontend run locally on the Mac. Only ensure Tailscale is Connected and GX10 NIM is up. Open http://localhost:3001/caseworker.
 
 If `:8001` is unreachable over Tailscale, tunnel the model port:
 
@@ -219,7 +219,7 @@ See gx10 guide appendix and README legacy options only if benchmarking on-box.
 ## Architecture
 
 ```
-Mac — React :3000/caseworker | :3000/kiosk
+Mac — React :3001/caseworker | :3001/kiosk
          │ HTTP POST via Vite proxy → localhost:8000
          ▼
 Mac — FastAPI :8000 (CPU, FORCE_CPU_SOLVER=1)
