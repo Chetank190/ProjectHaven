@@ -32,14 +32,25 @@ _PII_PATTERNS: list[tuple[str, str, int]] = [
 ]
 
 # ── Prompt injection patterns ─────────────────────────────────────────────────
+# Patterns must be specific enough not to fire on legitimate caseworker language.
+# False-positive risk: "Ignore prior clinical notes", "Disregard the previous flag",
+# "User: male, 34" — all normal intake phrasing that broad patterns would block.
 _INJECTION_PATTERNS: list[tuple[str, int]] = [
-    (r'ignore\s+(previous|above|all)\s+(instructions?|prompts?|rules?)',   re.IGNORECASE),
-    (r'you\s+are\s+now\s+(a|an)\s+\w+',                                   re.IGNORECASE),
-    (r'forget\s+(everything|all|your\s+instructions)',                     re.IGNORECASE),
-    (r'(system|assistant|user)\s*:\s',                                     re.IGNORECASE),
-    (r'<\|?\s*(system|endoftext|im_start|im_end)\s*\|?>',                 re.IGNORECASE),
-    (r'\b(jailbreak|dan\s+mode|do\s+anything\s+now)\b',                   re.IGNORECASE),
-    (r'disregard\s+(all|any|the)\s+(previous|prior|above)',                re.IGNORECASE),
+    # "ignore all/your/every [previous] instructions" — ownership/totality modifier required.
+    # Does NOT fire on: "ignore prior clinical instructions", "disregard previous medical directives"
+    # because those lack the explicit all/your/every/these ownership token.
+    (r'\b(?:ignore|disregard)\s+(?:all(?:\s+your)?\s+|your\s+|every\s+|these\s+)(?:previous\s+|prior\s+|above\s+)?(?:instructions?|prompts?|rules?|directives?|context)\b', re.IGNORECASE),
+    # "ignore the above/previous/original instructions" — "the" + specific temporal token,
+    # no intervening clinical adjective allowed (stops before reaching the noun immediately).
+    (r'\b(?:ignore|disregard)\s+the\s+(?:above|previous|prior|original)\s+(?:instructions?|prompts?|rules?|directives?|context|prompt)\b', re.IGNORECASE),
+    (r'forget\s+(everything|all|your\s+instructions)',                                  re.IGNORECASE),
+    (r'you\s+are\s+now\s+(a|an)\s+\w+',                                                re.IGNORECASE),
+    # LLM chat-format role tokens — "system:" and "assistant:" never appear in real intake notes;
+    # "user:" is excluded because caseworkers legitimately label demographics that way.
+    (r'\b(system|assistant)\s*:\s',                                                     re.IGNORECASE),
+    # Special tokens used to escape prompt context in model inputs
+    (r'<\|?\s*(system|endoftext|im_start|im_end)\s*\|?>',                              re.IGNORECASE),
+    (r'\b(jailbreak|dan\s+mode|do\s+anything\s+now)\b',                                re.IGNORECASE),
 ]
 
 

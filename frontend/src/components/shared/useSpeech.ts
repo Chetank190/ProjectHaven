@@ -1,17 +1,19 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { VOICE_HOLD_MAX_MS, VOICE_SILENCE_KILL_MS } from '../../config';
+import { cLog, cWarn, cErr } from '../../lib/clientLog';
 
 export interface SpeechState {
-  isListening:  boolean;
-  isRecording:  boolean;
-  isSpeaking:   boolean;
-  transcript:   string;
+  isListening:     boolean;
+  isRecording:     boolean;
+  isSpeaking:      boolean;
+  transcript:      string;   // live: interim + final (for display)
+  transcriptFinal: string;   // confirmed-final only (for logic — use this in eligibility)
 }
 
 export interface SpeechControls {
   startListening:   (continuous?: boolean) => void;
   stopListening:    () => void;
-  startRecording:   () => void;
+  startRecording:   () => Promise<void>;
   stopRecording:    () => Promise<Blob | null>;
   transcribeAudio:  (blob: Blob) => Promise<string | null>;
   speak:            (text: string, onEnd?: () => void) => void;
@@ -28,27 +30,29 @@ if (typeof window !== 'undefined') {
 }
 
 export function useSpeech(): SpeechState & SpeechControls {
-  const [isListening, setListening] = useState(false);
-  const [isRecording, setRecording] = useState(false);
-  const [isSpeaking,  setSpeaking]  = useState(false);
-  const [transcript,  setTranscript] = useState('');
+  const [isListening,     setListening]     = useState(false);
+  const [isRecording,     setRecording]     = useState(false);
+  const [isSpeaking,      setSpeaking]      = useState(false);
+  const [transcript,      setTranscript]    = useState('');
+  const [transcriptFinal, setTranscriptFinal] = useState('');
 
-  const recognitionRef   = useRef<SpeechRecognition | null>(null);
-  const mediaRecRef      = useRef<MediaRecorder | null>(null);
-  const audioChunks      = useRef<Blob[]>([]);
-  const hardCapRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const silenceRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recognitionRef       = useRef<SpeechRecognition | null>(null);
+  const mediaRecRef          = useRef<MediaRecorder | null>(null);
+  const audioChunks          = useRef<Blob[]>([]);
+  const hardCapRef           = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceRef           = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Track intent so auto-restart knows when NOT to restart
-  const wantListeningRef  = useRef(false);
-  const continuousModeRef = useRef(false);
-  // Accumulate confirmed-final text across restarts so it isn't lost
-  const finalTextRef      = useRef('');
+  const wantListeningRef     = useRef(false);
+  const continuousModeRef    = useRef(false);
+  // finalTextRef accumulates confirmed-final text across SR restarts (for `transcript`)
+  const finalTextRef         = useRef('');
+  // transcriptFinalRef mirrors the same data but drives `transcriptFinal` state separately
+  const transcriptFinalRef   = useRef('');
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   useEffect(() => {
-    if (!SR) console.warn('[useSpeech] webkitSpeechRecognition unavailable — Chrome required.');
+    if (!SR) cWarn('sr.unavailable', { hint: 'Chrome required for Web Speech API' });
   }, []);
 
   const clearTimers = () => {
@@ -66,26 +70,27 @@ export function useSpeech(): SpeechState & SpeechControls {
     sr.onstart = () => setListening(true);
 
     sr.onresult = (e: SpeechRecognitionEvent) => {
-      // Process only newly arrived results from e.resultIndex onward
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
-          finalTextRef.current += e.results[i][0].transcript + ' ';
+          const word = e.results[i][0].transcript;
+          finalTextRef.current       += word + ' ';
+          transcriptFinalRef.current += word + ' ';
+          // Update transcriptFinal state immediately on each final result
+          setTranscriptFinal(transcriptFinalRef.current.trim());
         }
       }
-      // Current interim segment (last non-final result, if any)
+      // Live display: final + current interim
       const lastResult = e.results[e.results.length - 1];
       const interim = !lastResult.isFinal ? lastResult[0].transcript : '';
       setTranscript((finalTextRef.current + interim).trimEnd());
 
-      // Reset silence timer on every speech event
+      // Silence detection: reset timer on every speech event
       if (silenceRef.current) clearTimeout(silenceRef.current);
       silenceRef.current = setTimeout(() => sr.stop(), VOICE_SILENCE_KILL_MS);
     };
 
     sr.onend = () => {
       clearTimers();
-      // Auto-restart if the caller still wants continuous listening
-      // (Chrome terminates recognition on network blips or ~60s timeout)
       if (wantListeningRef.current && continuousModeRef.current) {
         setTimeout(() => {
           if (!wantListeningRef.current) return;
@@ -94,7 +99,6 @@ export function useSpeech(): SpeechState & SpeechControls {
           try {
             newSr.start();
             recognitionRef.current = newSr;
-            // Don't reset finalTextRef — preserve accumulated transcript
           } catch { wantListeningRef.current = false; setListening(false); }
         }, 150);
       } else {
@@ -105,8 +109,9 @@ export function useSpeech(): SpeechState & SpeechControls {
 
     sr.onerror = (e: SpeechRecognitionErrorEvent) => {
       clearTimers();
-      console.warn('[useSpeech] error:', e.error, e.message);
-      // 'no-speech' and 'aborted' are benign — let onend handle restart
+      const benign = e.error === 'no-speech' || e.error === 'aborted';
+      if (benign) cLog('sr.error.benign', { error: e.error });
+      else        cWarn('sr.error', { error: e.error, message: e.message });
       if (e.error === 'not-allowed') {
         wantListeningRef.current = false;
         setListening(false);
@@ -119,25 +124,26 @@ export function useSpeech(): SpeechState & SpeechControls {
   const startListening = useCallback((continuous = false) => {
     if (!SR || wantListeningRef.current) return;
 
-    // Reset state for a fresh session
-    finalTextRef.current    = '';
-    continuousModeRef.current = continuous;
-    wantListeningRef.current  = true;
+    finalTextRef.current       = '';
+    transcriptFinalRef.current = '';
+    continuousModeRef.current  = continuous;
+    wantListeningRef.current   = true;
     setTranscript('');
+    setTranscriptFinal('');
 
     const sr = _buildRecognizer();
     if (!sr) return;
 
     try {
       sr.start();
+      cLog('sr.start', { continuous });
     } catch (err) {
-      console.warn('[useSpeech] sr.start() threw:', err);
+      cWarn('sr.start.failed', { error: String(err) });
       wantListeningRef.current = false;
       return;
     }
     recognitionRef.current = sr;
 
-    // Hard cap only applies to the initial session, not auto-restarts
     if (!continuous) {
       hardCapRef.current = setTimeout(() => sr.stop(), VOICE_HOLD_MAX_MS);
     }
@@ -151,15 +157,12 @@ export function useSpeech(): SpeechState & SpeechControls {
   }, []);
 
   const startRecording = useCallback(async () => {
+    if (mediaRecRef.current) return;
     try {
-      // Explicit audio constraints improve quality in noisy environments (kiosk)
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation:  true,
-          noiseSuppression:  true,
-          autoGainControl:   true,
-        },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
+      if (mediaRecRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
       const mr = new MediaRecorder(stream);
       audioChunks.current = [];
       mr.ondataavailable = e => { if (e.data.size > 0) audioChunks.current.push(e.data); };
@@ -167,7 +170,7 @@ export function useSpeech(): SpeechState & SpeechControls {
       mediaRecRef.current = mr;
       setRecording(true);
     } catch (e) {
-      console.error('[useSpeech] MediaRecorder failed:', e);
+      cErr('recorder.start.failed', { error: String(e) });
     }
   }, []);
 
@@ -189,30 +192,56 @@ export function useSpeech(): SpeechState & SpeechControls {
     try {
       const form = new FormData();
       form.append('audio', blob, 'recording.webm');
+      cLog('asr.request', { size_bytes: blob.size });
       const resp = await fetch('/api/v1/transcribe', { method: 'POST', body: form });
-      if (!resp.ok) return null;
+      if (!resp.ok) {
+        cWarn('asr.failed', { status: resp.status, fallback: 'webSpeech' });
+        return null;
+      }
       const data = await resp.json();
-      return (data.transcript as string) || null;
-    } catch {
+      const text = (data.transcript as string) || null;
+      cLog('asr.result', { chars: text?.length ?? 0, source: 'nim' });
+      return text;
+    } catch (e) {
+      cWarn('asr.error', { error: String(e), fallback: 'webSpeech' });
       return null;
     }
   }, []);
 
   const speak = useCallback((text: string, onEnd?: () => void) => {
+    wantListeningRef.current = false;
+    clearTimers();
+    recognitionRef.current?.stop();
+    setListening(false);
+
     window.speechSynthesis.cancel();
-    const utt  = new SpeechSynthesisUtterance(text);
-    utt.lang   = 'en-US'; // en-IN TTS voices are rarely installed; en-US is always present
-    utt.rate   = 0.9;
-    utt.pitch  = 0.85;
+
+    const utt   = new SpeechSynthesisUtterance(text);
+    utt.lang    = 'en-US';
+    utt.rate    = 0.9;
+    utt.pitch   = 0.85;
     const preferred = ['Google UK English Female', 'Samantha', 'Karen', 'Moira', 'Google US English'];
-    // Use cached voices (populated by voiceschanged event at module load)
-    const voices = cachedVoices.length ? cachedVoices : window.speechSynthesis.getVoices();
-    const voice  = preferred.map(n => voices.find(v => v.name === n)).find(Boolean);
+    const voices    = cachedVoices.length ? cachedVoices : window.speechSynthesis.getVoices();
+    const voice     = preferred.map(n => voices.find(v => v.name === n)).find(Boolean);
     if (voice) utt.voice = voice;
-    utt.onstart = () => setSpeaking(true);
-    utt.onend   = () => { setSpeaking(false); onEnd?.(); };
-    utt.onerror = () => { setSpeaking(false); onEnd?.(); };
-    window.speechSynthesis.speak(utt);
+
+    // Chrome TTS keepalive — prevents engine from hanging on long utterances
+    let keepAlive: ReturnType<typeof setInterval> | null = null;
+    const cleanup = () => { if (keepAlive) { clearInterval(keepAlive); keepAlive = null; } };
+
+    utt.onstart = () => {
+      setSpeaking(true);
+      keepAlive = setInterval(() => {
+        if (!window.speechSynthesis.speaking) { cleanup(); return; }
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }, 10_000);
+    };
+    utt.onend   = () => { cleanup(); setSpeaking(false); onEnd?.(); };
+    utt.onerror = () => { cleanup(); setSpeaking(false); onEnd?.(); };
+
+    // setTimeout(0) avoids Chrome cancel()+speak() same-tick race
+    setTimeout(() => window.speechSynthesis.speak(utt), 0);
   }, []);
 
   const stopSpeaking = useCallback(() => {
@@ -221,12 +250,15 @@ export function useSpeech(): SpeechState & SpeechControls {
   }, []);
 
   const clearTranscript = useCallback(() => {
-    finalTextRef.current = '';
+    finalTextRef.current       = '';
+    transcriptFinalRef.current = '';
     setTranscript('');
+    setTranscriptFinal('');
   }, []);
 
   return {
-    isListening, isRecording, isSpeaking, transcript,
+    isListening, isRecording, isSpeaking,
+    transcript, transcriptFinal,
     startListening, stopListening, startRecording, stopRecording, transcribeAudio,
     speak, stopSpeaking, clearTranscript,
   };

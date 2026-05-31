@@ -13,6 +13,7 @@ export interface NeedsPayload {
   has_id:              boolean | null;
   sobriety_status:     'sober' | 'using' | null;
   group_size:          'alone' | 'with_family' | null;
+  gender:              'male' | 'female' | 'non_binary' | null;
 }
 
 export interface ItineraryResult {
@@ -137,6 +138,45 @@ export interface KioskRouteResponse {
   itinerary:    Itinerary;
   tts_script:   string;
   gpu_solve_ms: number;
+}
+
+export interface NearbyService {
+  pillar:             string;
+  name:               string;
+  address:            string;
+  lat:                number;
+  lon:                number;
+  distance_km:        number;
+  distance_walk_min:  number;
+  hours:              string;
+  phone:              string;
+  requires_id:        boolean;
+  harm_reduction:     boolean;
+  transit_accessible: boolean;
+  open_now:           boolean | null;
+  bypass_pathway:     string;
+  intake_preparation: string;
+}
+
+export interface NearbyResponse {
+  services:  NearbyService[];
+  total:     number;
+  radius_km: number;
+}
+
+export interface KioskReserveRequest {
+  session_id:       string;
+  facility_name:    string;
+  facility_address: string;
+  pillar:           string;
+}
+
+export interface KioskReserveResponse {
+  code:             string;
+  facility_name:    string;
+  facility_address: string;
+  pillar:           string;
+  expires_at:       string;
 }
 
 export interface BriefingRequest {

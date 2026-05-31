@@ -5,6 +5,7 @@ session state tracking, and timeout enforcement.
 All voice timing constants come from config.py — tune without touching this file.
 """
 
+import logging
 import re
 import time
 import uuid
@@ -12,11 +13,15 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
     VOICE_SESSION_IDLE_SEC,
     VOICE_MIN_TRANSCRIPT_CHARS,
+    ASK_GENDER_FOR_PILLARS,
+    ASK_AGE_FOR_PILLARS,
     ASK_ID_FOR_PILLARS,
     ASK_SOBRIETY_FOR_PILLARS,
     ASK_GROUP_FOR_PILLARS,
@@ -42,12 +47,21 @@ _sessions: dict[str, VoiceSession] = {}
 def create_session(payload: NeedsPayload, origin: tuple) -> VoiceSession:
     s = VoiceSession(payload_draft=payload, origin=origin)
     _sessions[s.session_id] = s
+    needs = [k.replace("needs_", "") for k, v in payload.model_dump().items()
+             if k.startswith("needs_") and v]
+    logger.info(
+        f"[session:{s.session_id}] created  needs={needs}  "
+        f"sector={payload.sector}  origin={origin}"
+    )
     return s
 
 
 def get_session(session_id: str) -> VoiceSession | None:
     _cleanup_expired()
-    return _sessions.get(session_id)
+    s = _sessions.get(session_id)
+    if s is None:
+        logger.debug(f"[session:{session_id}] lookup miss (expired or unknown)")
+    return s
 
 
 def resolve_eligibility_questions(payload: NeedsPayload) -> list[str]:
@@ -55,12 +69,27 @@ def resolve_eligibility_questions(payload: NeedsPayload) -> list[str]:
     Determine which eligibility questions to ask based on active pillars.
     Returns ordered list of TTS-ready question strings (max 3).
     Questions only asked if the answer is not already known from the transcript.
+    Priority: age → gender → ID → sobriety → group — most impactful filters first.
     """
     questions = []
     active = [
         p for p in ["shelter", "rehab", "food", "hygiene", "supplies"]
         if getattr(payload, f"needs_{p}", False)
     ]
+
+    # Age — determines youth vs adult shelter pool (asked first; biggest pool filter)
+    if any(p in ASK_AGE_FOR_PILLARS for p in active) and payload.sector == "any":
+        questions.append(
+            "Are you 24 years old or younger? "
+            "We have shelters specifically for young people if so."
+        )
+
+    # Gender — many Toronto shelters are gender-specific (men's, women's, co-ed)
+    if any(p in ASK_GENDER_FOR_PILLARS for p in active) and payload.gender is None:
+        questions.append(
+            "To find the right shelter for you — are you looking for a men's shelter, "
+            "a women's shelter, or would any available bed work?"
+        )
 
     if any(p in ASK_ID_FOR_PILLARS for p in active) and payload.has_id is None:
         questions.append(
@@ -78,7 +107,31 @@ def resolve_eligibility_questions(payload: NeedsPayload) -> list[str]:
             "Are you on your own, or do you have family or children with you?"
         )
 
-    return questions[:3]
+    selected = questions[:3]
+    # Log which questions were skipped (already known from transcript) vs selected
+    skipped = [k for k, already_known in [
+        ("age",      payload.sector != "any"),
+        ("gender",   payload.gender is not None),
+        ("id",       payload.has_id is not None),
+        ("sobriety", payload.sobriety_status is not None),
+        ("group",    payload.group_size is not None),
+    ] if already_known]
+    logger.info(
+        f"[eligibility] questions={len(selected)}  "
+        f"types={[_q_type(q) for q in selected]}  "
+        f"already_known={skipped or 'none'}"
+    )
+    return selected
+
+
+def _q_type(q: str) -> str:
+    ql = q.lower()
+    if "24" in ql or "younger" in ql: return "age"
+    if "men's" in ql or "women's" in ql: return "gender"
+    if " id " in ql or ql.endswith("id?"): return "id"
+    if "drink" in ql or "used" in ql: return "sobriety"
+    if "family" in ql or "children" in ql: return "group"
+    return "unknown"
 
 
 def parse_eligibility_answer(question_text: str, answer_transcript: str) -> dict:
@@ -88,6 +141,25 @@ def parse_eligibility_answer(question_text: str, answer_transcript: str) -> dict
     """
     t = answer_transcript.lower().strip()
     q = question_text.lower()
+
+    # Age question → sets sector (youth vs adult)
+    if "24" in q or "younger" in q:
+        if any(w in t for w in ["yes", "yeah", "yep", "under", "young", "teenager", "teen", "i am"]):
+            return {"sector": "youth"}
+        if any(w in t for w in ["no", "nope", "older", "over", "adult", "not young", "i'm not"]):
+            return {"sector": "adult"}
+        return {}
+
+    # Gender question
+    if "men's shelter" in q or "women's shelter" in q or "any available bed" in q:
+        if any(w in t for w in ["women", "woman", "female", "ladies", "lady", "girl"]):
+            return {"gender": "female"}
+        if any(w in t for w in ["men", "man", "male", "guys", "guy"]):
+            return {"gender": "male"}
+        if any(w in t for w in ["any", "either", "doesn't matter", "don't mind", "both",
+                                  "non-binary", "nonbinary", "trans", "whatever"]):
+            return {"gender": None}
+        return {}
 
     if "id" in q:
         if any(w in t for w in ["yes", "yeah", "yep", "have it", "got it", "i do"]):
@@ -135,9 +207,7 @@ def clean_transcript(raw: str) -> str:
     # Redact Canadian PII patterns before any LLM inference
     cleaned, pii_count, pii_types = redact_pii(cleaned)
     if pii_count > 0:
-        logging.getLogger(__name__).info(
-            f"PII redacted: {pii_count} item(s) ({', '.join(pii_types)})"
-        )
+        logger.info(f"[pii] redacted {pii_count} item(s): {', '.join(pii_types)}")
 
     return cleaned
 
@@ -190,3 +260,5 @@ def _cleanup_expired():
     ]
     for sid in expired:
         del _sessions[sid]
+    if expired:
+        logger.debug(f"[session_gc] expired {len(expired)} session(s) — active={len(_sessions)}")

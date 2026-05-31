@@ -1,34 +1,43 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../../api/client';
 import { KIOSK_HUBS, KIOSK_DEFAULT_HUB, VOICE_SESSION_IDLE_MS, VOICE_MIN_CHARS } from '../../config';
-import type { KioskSessionResponse, KioskRouteResponse } from '../../types/api';
+import type { KioskSessionResponse, KioskRouteResponse, KioskReserveResponse, ItineraryResult } from '../../types/api';
+import { cLog, cWarn } from '../../lib/clientLog';
 import { useSpeech }       from '../shared/useSpeech';
 import { VoiceOrb }        from './VoiceOrb';
 import { EligibilityFlow } from './EligibilityFlow';
 import { KioskItinerary }  from './KioskItinerary';
+import { ReservationCode } from './ReservationCode';
 import { HavenMatrixLogo } from '../shared/HavenMatrixLogo';
 
 type KioskState =
   | 'idle' | 'hub_select' | 'recording'
   | 'processing' | 'eligibility' | 'routing'
-  | 'speaking' | 'crisis' | 'typing' | 'done';
+  | 'speaking' | 'crisis' | 'typing' | 'done'
+  | 'reserving' | 'reservation_done';
 
 const HUB_NAMES = Object.keys(KIOSK_HUBS);
 
 export function KioskPage() {
   const {
     speak, startListening, stopListening, transcript, clearTranscript,
-    startRecording, stopRecording, transcribeAudio,
+    startRecording, stopRecording, transcribeAudio, stopSpeaking,
   } = useSpeech();
-  const [kioskState,      setKioskState]      = useState<KioskState>('idle');
-  const [hubName,         setHubName]         = useState<string>(KIOSK_DEFAULT_HUB);
-  const [sessionId,       setSessionId]       = useState<string | null>(null);
-  const [questions,       setQuestions]       = useState<string[]>([]);
-  const [routeResult,     setRouteResult]     = useState<KioskRouteResponse | null>(null);
-  const [crisisHotline,   setCrisisHotline]   = useState<string | null>(null);
-  const [crisisText,      setCrisisText]      = useState<string | null>(null);
-  const [typedText,       setTypedText]       = useState('');
-  const [error,           setError]           = useState<string | null>(null);
+  const [kioskState,        setKioskState]        = useState<KioskState>('idle');
+  const [hubName,           setHubName]           = useState<string>(KIOSK_DEFAULT_HUB);
+  const [sessionId,         setSessionId]         = useState<string | null>(null);
+  const [questions,         setQuestions]         = useState<string[]>([]);
+  const [routeResult,       setRouteResult]       = useState<KioskRouteResponse | null>(null);
+  const [reservation,       setReservation]       = useState<KioskReserveResponse | null>(null);
+  const [crisisHotline,     setCrisisHotline]     = useState<string | null>(null);
+  const [crisisText,        setCrisisText]        = useState<string | null>(null);
+  const [typedText,         setTypedText]         = useState('');
+  const [error,             setError]             = useState<string | null>(null);
+  // Saved for intelligent re-route after location change from results screen
+  const [lastAnswers,       setLastAnswers]       = useState<Record<string, boolean | string | null>>({});
+  const [lastTranscript,    setLastTranscript]    = useState<string>('');
+  // Which state triggered hub_select — controls heading text, cancel target, and re-route logic
+  const [hubSelectFrom,     setHubSelectFrom]     = useState<KioskState>('idle');
 
   const idleTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const kioskStateRef  = useRef<KioskState>('idle');
@@ -36,17 +45,32 @@ export function KioskPage() {
 
   useEffect(() => { kioskStateRef.current = kioskState; }, [kioskState]);
 
+  // Clear idle timer on unmount to prevent setState on dead component
+  useEffect(() => () => { if (idleTimerRef.current) clearTimeout(idleTimerRef.current); }, []);
+
   const resetIdle = () => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
-      if (['eligibility', 'routing', 'processing'].includes(kioskStateRef.current)) return;
+      // Never interrupt active operations, typing mid-input, or the reservation
+      // code screen (user may still be reading / printing their code).
+      const noInterrupt = ['eligibility', 'routing', 'processing', 'typing', 'done', 'reserving', 'reservation_done'];
+      if (noInterrupt.includes(kioskStateRef.current)) return;
       window.speechSynthesis.cancel();
       setKioskState('idle');
       setSessionId(null);
       setQuestions([]);
       setRouteResult(null);
+      setReservation(null);
+      setLastTranscript('');
+      setLastAnswers({});
     }, VOICE_SESSION_IDLE_MS);
   };
+
+  // Start a fresh idle window whenever the typing screen opens so the timer is
+  // measured from when typing begins, not from when the previous recording started.
+  useEffect(() => {
+    if (kioskState === 'typing') resetIdle();
+  }, [kioskState]);
 
   useEffect(() => {
     if (kioskState === 'idle') {
@@ -57,14 +81,33 @@ export function KioskPage() {
     }
   }, [kioskState]);
 
-  // Tap-to-toggle: first tap starts recording (ASR NIM) + listening (Web Speech live display)
-  // Second tap: stop both, try ASR NIM transcript first, fall back to Web Speech
+  // Open the hub selector, remembering which state triggered it
+  const openHubSelect = (fromState: KioskState) => {
+    // Kill audio and clear any error toast before showing the hub selector.
+    stopSpeaking();
+    stopListening();
+    setError(null);
+    if (fromState === 'recording') {
+      stopRecording();   // discard in-progress audio
+    }
+    setHubSelectFrom(fromState);
+    setKioskState('hub_select');
+  };
+
   const handleOrbTap = async () => {
     if (kioskState === 'idle' || kioskState === 'done') {
+      stopSpeaking();
+      // Force-reset recognition state — guards against wantListeningRef stuck true
+      // from a previous session (e.g. eligibility flow that wasn't fully cleaned up).
+      stopListening();
       setError(null);
       clearTranscript();
-      startListening(true);    // Web Speech API — continuous mode so pauses don't cut transcript
-      startRecording();        // MediaRecorder — audio blob for ASR NIM
+      // Give speaker echo time to die before opening the mic (500ms is safer than 250ms
+      // on real kiosk hardware where speaker and mic share the same enclosure).
+      await new Promise(r => setTimeout(r, 500));
+      startListening(true);
+      await startRecording();
+      cLog('recording.start', { hub: hubName });
       setKioskState('recording');
       resetIdle();
       return;
@@ -74,21 +117,29 @@ export function KioskPage() {
     stopListening();
     setKioskState('processing');
 
-    // Collect audio blob; fall back to Web Speech transcript if ASR unavailable
     const blob = await stopRecording();
     let captured = '';
+    let transcriptSource = 'none';
     if (blob && blob.size > 0) {
       const asrText = await transcribeAudio(blob);
-      if (asrText) captured = asrText;
+      if (asrText) { captured = asrText; transcriptSource = 'asr_nim'; }
     }
-    if (!captured) captured = transcript;  // Web Speech fallback
+    if (!captured) { captured = transcript; transcriptSource = captured ? 'web_speech' : 'none'; }
+
+    cLog('recording.stop', { chars: captured.length, source: transcriptSource, hub: hubName });
 
     if (!captured || captured.trim().length < VOICE_MIN_CHARS) {
-      // Voice failed silently (noisy environment) — offer text fallback instead of an error
+      cWarn('recording.too_short', { chars: captured.length, source: transcriptSource });
       setTypedText('');
-      setKioskState('typing');
+      speak(
+        "Sorry, I couldn't hear that clearly. Tap the button to try again, or tap the keyboard icon below to type instead.",
+        () => setKioskState('typing'),
+      );
+      setKioskState('done');
       return;
     }
+
+    setLastTranscript(captured);
 
     try {
       const r = await api.post<KioskSessionResponse>('/kiosk/session', {
@@ -97,20 +148,28 @@ export function KioskPage() {
         origin_lon:  hubCoords[1],
       });
       if (r.data.next_step === 'crisis') {
+        cLog('session.crisis', { category: r.data.crisis_category });
         setCrisisHotline(r.data.crisis_hotline ?? '988');
         setCrisisText(r.data.escalation_text ?? '');
         setKioskState('crisis');
         speak(r.data.escalation_text ?? 'Please call 9-8-8 for crisis support.');
         return;
       }
+      cLog('session.created', {
+        session_id:      r.data.session_id,
+        next_step:       r.data.next_step,
+        questions_count: r.data.eligibility_questions.length,
+      });
       setSessionId(r.data.session_id);
       if (r.data.next_step === 'collect_eligibility' && r.data.eligibility_questions.length > 0) {
         setQuestions(r.data.eligibility_questions);
         setKioskState('eligibility');
       } else {
+        setLastAnswers({});
         await submitRoute(r.data.session_id!, {});
       }
     } catch {
+      cWarn('session.error');
       const msg = "I'm sorry, something went wrong. Please tap to try again.";
       setError(msg);
       speak(msg, () => { setError(null); setKioskState('idle'); });
@@ -126,6 +185,11 @@ export function KioskPage() {
       });
       setError(null);
       setRouteResult(r.data);
+      // Log which pillars were returned and top distances for analysis
+      const summary = Object.entries(r.data.itinerary)
+        .filter(([, results]) => results.length > 0)
+        .map(([pillar, results]) => ({ pillar, name: results[0].name, km: results[0].distance_km }));
+      cLog('route.result', { pillars: summary.map(s => s.pillar), top: summary, solve_ms: r.data.gpu_solve_ms });
       setKioskState('speaking');
     } catch {
       const msg = "I'm sorry, I wasn't able to find anything right now. You can also call 2-1-1 for help.";
@@ -135,12 +199,37 @@ export function KioskPage() {
   };
 
   const onEligibilityComplete = (answers: Record<string, boolean | string | null>) => {
+    setLastAnswers(answers);
     if (sessionId) submitRoute(sessionId, answers);
+  };
+
+  const handleReserve = async (result: ItineraryResult, pillar: string) => {
+    if (!sessionId) return;
+    setKioskState('reserving');
+    try {
+      const r = await api.post<KioskReserveResponse>('/kiosk/reserve', {
+        session_id:       sessionId,
+        facility_name:    result.name,
+        facility_address: result.address,
+        pillar,
+      });
+      setReservation(r.data);
+      setKioskState('reservation_done');
+    } catch {
+      const msg = "I wasn't able to make the reservation. Please go directly to the shelter.";
+      // Use setKioskState directly in onEnd — avoids a stale-closure race where the
+      // user could reset to idle before TTS ends, then the callback revives 'speaking'.
+      // Speaking state is only restored if routeResult is still populated.
+      speak(msg, () => {
+        setKioskState(prev => (prev === 'reserving' || prev === 'idle') && routeResult ? 'speaking' : prev);
+      });
+    }
   };
 
   const submitText = async (text: string) => {
     if (text.trim().length < VOICE_MIN_CHARS) return;
     setError(null);
+    setLastTranscript(text.trim());
     setKioskState('processing');
     try {
       const r = await api.post<KioskSessionResponse>('/kiosk/session', {
@@ -160,42 +249,104 @@ export function KioskPage() {
         setQuestions(r.data.eligibility_questions);
         setKioskState('eligibility');
       } else {
+        setLastAnswers({});
         await submitRoute(r.data.session_id!, {});
       }
     } catch {
-      setKioskState('typing');  // stay on typing screen so they can retry
+      const msg = "Sorry, something went wrong. Please try again.";
+      setError(msg);
+      speak(msg, () => { setError(null); setKioskState('typing'); });
     }
   };
 
-  // Hub selection — show when no hub chosen yet, or when user taps Change
+  // Intelligent hub selection:
+  // • From 'speaking': re-run the same request from the new location (no re-speaking needed)
+  // • From 'typing':   return to typing screen with new coords applied at submit time
+  // • From anything else: reset to idle at the new location
+  const handleHubSelect = async (name: string) => {
+    const newCoords = KIOSK_HUBS[name] as [number, number] ?? hubCoords;
+    setHubName(name);
+
+    if (hubSelectFrom === 'speaking' && lastTranscript) {
+      // Re-run the original request from the new hub
+      setKioskState('routing');
+      try {
+        const r = await api.post<KioskSessionResponse>('/kiosk/session', {
+          transcript:  lastTranscript,
+          origin_lat:  newCoords[0],
+          origin_lon:  newCoords[1],
+        });
+        if (r.data.next_step === 'crisis') {
+          setCrisisHotline(r.data.crisis_hotline ?? '988');
+          setCrisisText(r.data.escalation_text ?? '');
+          setKioskState('crisis');
+          speak(r.data.escalation_text ?? 'Please call 9-8-8 for crisis support.');
+          return;
+        }
+        const newSid = r.data.session_id!;
+        setSessionId(newSid);
+        // Skip re-asking eligibility — use previously collected answers
+        await submitRoute(newSid, lastAnswers);
+      } catch {
+        speak(
+          "Location updated. Tap the button to search again.",
+          () => { setKioskState('idle'); setSessionId(null); setRouteResult(null); },
+        );
+      }
+      return;
+    }
+
+    if (hubSelectFrom === 'typing') {
+      // Stay on typing screen — coords will be used when they submit
+      setKioskState('typing');
+      return;
+    }
+
+    // Default: reset to idle at new location — clear all session and error state
+    setKioskState('idle');
+    setSessionId(null);
+    setRouteResult(null);
+    setReservation(null);
+    setQuestions([]);
+    setLastTranscript('');
+    setLastAnswers({});
+    setError(null);
+  };
+
+  // ── Hub selector ──────────────────────────────────────────────────────────────
   if (kioskState === 'hub_select' || (kioskState === 'idle' && !hubName)) {
+    const isReroute  = hubSelectFrom === 'speaking';
+    const fromTyping = hubSelectFrom === 'typing';
+    const cancelTarget = isReroute ? 'speaking' : fromTyping ? 'typing' : 'idle';
+
     return (
       <div className="min-h-screen flex flex-col items-center justify-start px-6 py-10"
         style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #0D2436 60%, #061825 100%)' }}>
 
-        {/* Header */}
         <div className="flex items-center gap-2 mb-2">
           <HavenMatrixLogo size={22} />
           <span className="text-xs font-medium tracking-widest uppercase"
             style={{ color: 'rgba(114,200,226,0.55)' }}>Haven Matrix</span>
         </div>
+
         <h1 className="text-3xl font-light mb-1 mt-4 text-center"
           style={{ color: 'rgba(114,200,226,0.9)' }}>
-          Where are you right now?
+          {isReroute ? 'Change location' : 'Where are you right now?'}
         </h1>
         <p className="text-sm mb-8 text-center"
           style={{ color: 'rgba(255,255,255,0.3)' }}>
-          Choose your nearest location for accurate directions
+          {isReroute
+            ? "We'll re-search from the new location — no need to repeat yourself"
+            : 'Choose your nearest location for accurate directions'}
         </p>
 
-        {/* 2-column grid */}
         <div className="w-full max-w-lg grid grid-cols-2 gap-3">
           {HUB_NAMES.map(name => {
             const isSelected = name === hubName;
             return (
               <button
                 key={name}
-                onClick={() => { setHubName(name); setKioskState('idle'); }}
+                onClick={() => handleHubSelect(name)}
                 className="text-left rounded-2xl px-4 py-4 transition-all"
                 style={{
                   background: isSelected ? 'rgba(26,147,187,0.20)' : 'rgba(255,255,255,0.04)',
@@ -216,10 +367,9 @@ export function KioskPage() {
           })}
         </div>
 
-        {/* Only show Cancel if user came from idle (hub was already set) */}
         {hubName && kioskState === 'hub_select' && (
           <button
-            onClick={() => setKioskState('idle')}
+            onClick={() => setKioskState(cancelTarget)}
             className="mt-8 text-sm font-light px-6 py-3 rounded-xl"
             style={{ color: 'rgba(114,200,226,0.4)', border: '1px solid rgba(26,147,187,0.15)' }}>
             Cancel
@@ -229,16 +379,85 @@ export function KioskPage() {
     );
   }
 
-  if (kioskState === 'speaking' && routeResult) {
+  // ── Reservation code screen ───────────────────────────────────────────────────
+  if (kioskState === 'reservation_done' && reservation) {
     return (
-      <KioskItinerary
-        itinerary={routeResult.itinerary}
-        ttsScript={routeResult.tts_script}
-        onReset={() => { setKioskState('idle'); setRouteResult(null); setSessionId(null); }}
+      <ReservationCode
+        reservation={reservation}
+        onReset={() => {
+          setKioskState('idle');
+          setRouteResult(null);
+          setReservation(null);
+          setSessionId(null);
+          setLastAnswers({});
+          setLastTranscript('');
+        }}
       />
     );
   }
 
+  // ── Reserving (brief processing state) ───────────────────────────────────────
+  if (kioskState === 'reserving') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center"
+        style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #0D2436 60%, #061825 100%)' }}>
+        <div className="flex flex-col items-center gap-6">
+          <div className="flex items-center gap-1.5 h-10">
+            {[0,1,2,3,4].map(i => (
+              <div key={i} className="w-1.5 rounded-full animate-wave"
+                style={{ height: 28, background: '#38AED2', opacity: 0.7, animationDelay: `${i * 0.12}s` }} />
+            ))}
+          </div>
+          <p className="text-2xl font-light" style={{ color: 'rgba(114,200,226,0.9)' }}>
+            Making your reservation…
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Results screen — wrap KioskItinerary with a persistent location chip ──────
+  if (kioskState === 'speaking' && routeResult) {
+    return (
+      <div className="relative">
+        {/* Floating location chip — more prominent here since re-route is the key action */}
+        <button
+          onClick={() => openHubSelect('speaking')}
+          className="fixed top-4 left-4 z-50 flex items-center gap-1.5 px-3 py-2 rounded-full transition-all"
+          style={{
+            background: 'rgba(26,147,187,0.22)',
+            border: '1px solid rgba(56,174,210,0.45)',
+            backdropFilter: 'blur(8px)',
+          }}>
+          <span className="text-xs">📍</span>
+          <span className="text-xs font-semibold tracking-wide" style={{ color: '#72C8E2' }}>
+            {hubName}
+          </span>
+          <span className="text-xs font-medium" style={{ color: 'rgba(114,200,226,0.5)' }}>
+            › change
+          </span>
+        </button>
+
+        <KioskItinerary
+          itinerary={routeResult.itinerary}
+          ttsScript={routeResult.tts_script}
+          originLat={hubCoords[0]}
+          originLon={hubCoords[1]}
+          hubName={hubName}
+          onReserve={handleReserve}
+          onReset={() => {
+            setKioskState('idle');
+            setRouteResult(null);
+            setSessionId(null);
+            setLastAnswers({});
+            setLastTranscript('');
+          }}
+        />
+      </div>
+    );
+  }
+
+  // ── Crisis screen ─────────────────────────────────────────────────────────────
   if (kioskState === 'crisis') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center px-8 py-12 text-center"
@@ -255,7 +474,12 @@ export function KioskPage() {
           {crisisHotline}
         </div>
         <button
-          onClick={() => { setKioskState('idle'); setCrisisHotline(null); setCrisisText(null); }}
+          onClick={() => {
+            setKioskState('idle');
+            setCrisisHotline(null); setCrisisText(null);
+            // Reset all session state so a re-record starts completely fresh
+            setSessionId(null); setQuestions([]); setLastAnswers({}); setLastTranscript('');
+          }}
           className="mt-4 text-lg font-light px-8 py-4 rounded-2xl transition-all"
           style={{
             color: 'rgba(114,200,226,0.5)',
@@ -268,13 +492,13 @@ export function KioskPage() {
     );
   }
 
+  // ── Typing / text fallback ────────────────────────────────────────────────────
   if (kioskState === 'typing') {
     const ready = typedText.trim().length >= VOICE_MIN_CHARS;
     return (
       <div className="min-h-screen flex flex-col"
         style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #0D2436 60%, #061825 100%)' }}>
 
-        {/* Top bar */}
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
           <button
             tabIndex={0}
@@ -287,12 +511,22 @@ export function KioskPage() {
             }}>
             🎤 Switch to voice
           </button>
-          <span className="text-xs" style={{ color: 'rgba(114,200,226,0.30)' }}>
-            📍 {hubName}
-          </span>
+
+          {/* Location chip — interactive in typing mode */}
+          <button
+            onClick={() => openHubSelect('typing')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all"
+            style={{
+              color: 'rgba(114,200,226,0.65)',
+              background: 'rgba(26,147,187,0.08)',
+              border: '1px solid rgba(56,174,210,0.18)',
+            }}>
+            <span className="text-xs">📍</span>
+            <span className="text-xs font-medium">{hubName}</span>
+            <span className="text-xs" style={{ color: 'rgba(114,200,226,0.35)' }}>›</span>
+          </button>
         </div>
 
-        {/* Prompt */}
         <div className="px-6 pt-4 pb-6">
           <h2 className="text-3xl font-light mb-2" style={{ color: 'rgba(255,255,255,0.90)' }}>
             Tell us what you need
@@ -302,11 +536,10 @@ export function KioskPage() {
           </p>
         </div>
 
-        {/* Large textarea */}
         <div className="flex-1 px-6">
           <textarea
             value={typedText}
-            onChange={e => setTypedText(e.target.value)}
+            onChange={e => { setTypedText(e.target.value); resetIdle(); }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && ready) { e.preventDefault(); submitText(typedText); } }}
             placeholder="e.g. I need a shelter for tonight. I don't have ID. I've been drinking."
             rows={7}
@@ -325,7 +558,6 @@ export function KioskPage() {
           </p>
         </div>
 
-        {/* Submit */}
         <div className="px-6 pb-10 pt-4">
           <button
             onClick={() => submitText(typedText)}
@@ -344,6 +576,7 @@ export function KioskPage() {
     );
   }
 
+  // ── Eligibility questions ─────────────────────────────────────────────────────
   if (kioskState === 'eligibility') {
     return (
       <div className="min-h-screen flex items-center justify-center"
@@ -357,6 +590,7 @@ export function KioskPage() {
     );
   }
 
+  // ── Main orb screen (idle / recording / processing / routing / done) ──────────
   const orbState = (
     kioskState === 'recording'  ? 'listening'  :
     kioskState === 'processing' ? 'processing' :
@@ -364,24 +598,29 @@ export function KioskPage() {
     'idle'
   );
 
+  const chipInteractive = kioskState === 'idle' || kioskState === 'done';
+
   return (
     <div className="min-h-screen flex flex-col relative"
       style={{ background: 'linear-gradient(160deg, #0A1E2E 0%, #0D2436 50%, #061825 100%)' }}>
 
-      {/* Location chip — tap to change */}
+      {/* Location chip */}
       <button
-        onClick={() => setKioskState('hub_select')}
+        onClick={() => chipInteractive && openHubSelect('idle')}
         className="absolute top-4 left-4 flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all"
         style={{
           background: 'rgba(26,147,187,0.10)',
           border: '1px solid rgba(56,174,210,0.20)',
+          cursor: chipInteractive ? 'pointer' : 'default',
+          opacity: chipInteractive ? 1 : 0.45,
         }}>
         <span className="text-xs" style={{ color: 'rgba(114,200,226,0.55)' }}>📍</span>
-        <span className="text-xs font-medium tracking-wide"
-          style={{ color: 'rgba(114,200,226,0.55)' }}>
+        <span className="text-xs font-medium tracking-wide" style={{ color: 'rgba(114,200,226,0.55)' }}>
           {hubName}
         </span>
-        <span className="text-xs" style={{ color: 'rgba(114,200,226,0.30)' }}>›</span>
+        {chipInteractive && (
+          <span className="text-xs" style={{ color: 'rgba(114,200,226,0.30)' }}>›</span>
+        )}
       </button>
 
       {/* Haven Matrix wordmark */}
@@ -393,7 +632,6 @@ export function KioskPage() {
         </span>
       </div>
 
-      {/* Non-alarming error message */}
       {error && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 rounded-xl px-5 py-2.5 text-sm font-medium"
           style={{ background: 'rgba(26,147,187,0.15)', border: '1px solid rgba(56,174,210,0.3)', color: '#AADEED' }}>
@@ -402,22 +640,16 @@ export function KioskPage() {
       )}
 
       <div className="flex-1 relative">
-        <VoiceOrb
-          state={orbState}
-          onClick={handleOrbTap}
-        />
+        <VoiceOrb state={orbState} onClick={handleOrbTap} />
 
-        {/* Live transcript — shown while recording and briefly during processing */}
         {(kioskState === 'recording' || kioskState === 'processing') && transcript && (
           <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-full max-w-sm px-6 text-center pointer-events-none">
-            <p className="text-xl font-light leading-relaxed"
-               style={{ color: 'rgba(114,200,226,0.85)' }}>
+            <p className="text-xl font-light leading-relaxed" style={{ color: 'rgba(114,200,226,0.85)' }}>
               {transcript}
             </p>
           </div>
         )}
 
-        {/* Text fallback toggle — only on idle, excluded from tab order (voice is primary) */}
         {(kioskState === 'idle' || kioskState === 'done') && (
           <button
             tabIndex={-1}

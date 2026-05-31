@@ -5,14 +5,72 @@
 
 ---
 
-## Current Codebase State (as of 2026-05-30, Session 10)
+## Current Codebase State (as of 2026-05-30, Session 12)
 
-**All features working.** Auth active. Case store saving and returning hints working. Map view active. Capacity ticker live. Speech on `en-IN`. Cloud NIM active if `NGC_API_KEY` set. Frontend on **:5173**.
+**All features working.** Auth active. Case store + returning hints active. Map view active. Capacity ticker live. Kiosk speech stable. Cloud NIM active if `NGC_API_KEY` set. Frontend on **:5173**.
 
 ### What's running right now
 - Backend `:8000` — CPU routing, cloud NIM for LLM (`NGC_API_KEY` set), auth + case store active
 - Frontend `:5173` — `http://localhost:5173/login` → caseworker | `http://localhost:5173/kiosk`
-- GX10 `:8001` NIM — docker pull still blocked (EULA). Cloud NIM is Tier 1 and working.
+- GX10 `:8001` NIM — **EULA still unaccepted** (see Known Issues). Cloud NIM is active fallback.
+
+### New in Session 12
+
+**Kiosk bug fixes** (7 confirmed bugs fixed across 4 files):
+
+`KioskPage.tsx`:
+- Idle timer now cleared on component unmount (no more setState-on-dead-component warning)
+- Crisis screen "tap to return" now also resets `sessionId`, `questions`, `lastAnswers`, `lastTranscript` — stale session no longer leaks into next interaction
+- `submitText()` network failure now speaks an error message before returning to typing screen (was silently resetting state with no user feedback)
+
+`EligibilityFlow.tsx`:
+- Added 8 s `ttsFallback` timeout in `speakQuestion()` — if TTS never fires `onend`/`onerror` (browser engine locked), the question auto-advances instead of hanging indefinitely
+
+`KioskItinerary.tsx`:
+- Added `nearbyError` state: network failure on `/nearby` now shows "Couldn't load nearby services / Call 211" with a retry button, instead of silently rendering an empty list
+- Leaflet map correctly rebuilds when switching back to route tab (linter fix: map is now destroyed on tab leave and rebuilt on return, fixing potential stale-tile issue)
+
+`useSpeech.ts` (already had TTS keepAlive — verified correct):
+- Chrome 15 s SpeechSynthesis cutoff handled via `setInterval(() => { pause(); resume(); }, 10_000)` started in `utt.onstart`, cleared in `onend`/`onerror`
+- `stopSpeaking()` → `cancel()` triggers `onerror` which clears the interval — no leak
+
+**Data sources documented** (`learning/DATA_SOURCES.md`):
+- All 12 data sources catalogued with source URLs, licenses, row counts, column definitions, refresh commands
+- Key: shelters auto-refresh from CKAN on startup; TTC GTFS and OSM are periodic manual re-exports
+
+**Injection detection final state** (`backend/pii_scrubber.py`):
+- Pattern: `\b(?:ignore|disregard)\s+(?:\w+\s+){0,3}(?:instructions?|prompts?|rules?|directives?)\b`
+- Verified against 20 test cases: 12/12 attacks blocked, 8/8 legit caseworker phrases pass (including "User: male, 34", "Disregard previous behavioral flag", "Ignore prior clinical notes")
+- `user:` removed from role-token list; `system:` and `assistant:` remain
+
+**ASR / Voice model clarification**:
+- Tier 1: Parakeet-0.6B-CTC on GX10 port 9000 (fast CTC decoder; **blocked by EULA**)
+- Tier 2: NVIDIA cloud ASR (Parakeet via API; audio leaves device; requires `NGC_API_KEY`)
+- Tier 3: Web Speech API, `lang = 'en-IN'` (Google's Indian English model — most accent-diverse English corpus, correct choice for Toronto's multilingual unhoused population)
+- TTS: Web Speech Synthesis, `lang = 'en-US'`, preferred voices: Google UK English Female / Samantha / Karen
+
+**`cLog` / `cWarn` structured logging** added across kiosk frontend (linter additions):
+- `recording.start`, `recording.stop`, `session.created`, `session.crisis`, `session.error` events
+- `eligibility.question`, `eligibility.answer`, `eligibility.complete` events
+- Source: `frontend/src/lib/clientLog.ts`
+
+### New in Session 11
+
+**Kiosk mic/TTS isolation** (`frontend/src/components/shared/useSpeech.ts`, `KioskPage.tsx`):
+- `speak()` now stops `SpeechRecognition` before starting TTS — prevents kiosk's own voice being transcribed
+- `handleOrbTap()` calls `stopSpeaking()` + waits 500ms before opening the mic (speaker echo settles; 500ms on kiosk hardware, 250ms in earlier iteration)
+- `EligibilityFlow` was already correct (mic only opens inside `onEnd` callback)
+
+**Transit check vectorization** (`backend/solver.py`):
+- Replaced per-candidate `_check_transit()` calls (45 sequential pandas mask scans) with a single `np.any()` broadcast over all stops × all candidates per pillar
+- `_check_transit` function removed entirely; logic is now inline in `_score_and_rank()`
+- Added early-return guard for empty `idx_list`
+
+**Injection detection tightened** (`backend/pii_scrubber.py`):
+- Initial fix in Session 11; further refined in Session 12 verification (see Session 12 above)
+
+**Async startup** (`backend/main.py`):
+- `fetch_weather_alert()` at startup changed to `await asyncio.to_thread(fetch_weather_alert)` — event loop no longer blocks during startup weather fetch
 
 ### New in Session 10
 
@@ -49,12 +107,14 @@
 - `sr.onstart` for accurate listening state; TTS voice cached via `voiceschanged` event
 
 ### Known remaining issues
-- GX10 NIM pull blocked — accept EULA at `build.nvidia.com/google/gemma-3n-e4b-it` first
+- **GX10 Parakeet ASR NIM blocked** — accept EULA at `build.nvidia.com/nvidia/parakeet-ctc-0.6b-asr`, then `docker pull nvcr.io/nvidia/nim/nvidia/parakeet-ctc-0.6b-asr:latest && docker run --gpus all -p 9000:9000 ...` — **must do before demo for on-device ASR privacy story**
+- **GX10 Gemma NIM blocked** — accept EULA at `build.nvidia.com/google/gemma-3n-e4b-it` first
 - Frontend on :5173 — set `CORS_ORIGINS=http://localhost:5173` in .env
 - Caseworker origin hardcoded `(43.6532, -79.3832)` in `CaseworkerPage.tsx`
 - Shelter sector mapping misses non-standard values (e.g. "Couples")
 - `JWT_SECRET` is insecure default — set in `.env` for any real deployment
 - No email verification (intentional for hackathon)
+- Reservation codes accumulate in `cases.db` indefinitely (no cleanup job — not a demo risk)
 
 See `haven_matrix_implementation.md` §7-§8 for full session logs and §8 for complete known issues.
 

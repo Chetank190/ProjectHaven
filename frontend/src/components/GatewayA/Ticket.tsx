@@ -9,9 +9,11 @@ export function Ticket({ ticketText, clientName }: Props) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
-    navigator.clipboard.writeText(ticketText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard.writeText(ticketText)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); })
+      .catch(() => {
+        // Clipboard blocked (HTTP or permissions denied) — silent fail, copy button stays normal
+      });
   };
 
   return (

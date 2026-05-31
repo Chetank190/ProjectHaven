@@ -29,6 +29,7 @@ from config import (
 )
 from case_store import CaseStore
 from auth_store import AuthStore
+from reservation_store import ReservationStore
 from data_ingestion import load_all, fetch_weather_alert, get_weather_alert, refresh_shelters
 from crisis_gate import is_crisis, build_escalation_reply
 from guardrails_client import init_guardrails, check_input as guardrails_check
@@ -84,8 +85,9 @@ datasets_cpu: dict = {}
 _last_benchmark: dict = {"gpu_ms": None, "cpu_ms": None}
 _rapids_mode: str = "cpu"
 _telemetry_header_written: bool = False
-case_store: CaseStore | None = None
-auth_store: AuthStore | None = None
+case_store:        CaseStore        | None = None
+auth_store:        AuthStore        | None = None
+reservation_store: ReservationStore | None = None
 
 
 def _log_telemetry(gateway: str, payload: NeedsPayload, compile_method: str,
@@ -119,9 +121,10 @@ def _log_telemetry(gateway: str, payload: NeedsPayload, compile_method: str,
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global datasets_gpu, datasets_cpu, _rapids_mode, _telemetry_header_written, case_store, auth_store
-    case_store = CaseStore(str(CASE_DB_PATH))
-    auth_store = AuthStore(str(CASE_DB_PATH))
+    global datasets_gpu, datasets_cpu, _rapids_mode, _telemetry_header_written, case_store, auth_store, reservation_store
+    case_store        = CaseStore(str(CASE_DB_PATH))
+    auth_store        = AuthStore(str(CASE_DB_PATH))
+    reservation_store = ReservationStore(str(CASE_DB_PATH))
 
     _setup_logging()
 
@@ -141,8 +144,8 @@ async def lifespan(app: FastAPI):
 
     datasets_cpu, _ = load_all(EngineMode.CPU)
 
-    # Fetch weather alert at startup (500ms fail-safe)
-    fetch_weather_alert()
+    # Fetch weather alert at startup without blocking the event loop
+    await asyncio.to_thread(fetch_weather_alert)
 
     # Initialise NeMo Guardrails (optional — no-op if GUARDRAILS_ENABLED not set)
     guardrails_active = init_guardrails()
@@ -182,16 +185,27 @@ async def lifespan(app: FastAPI):
     hyd_task.cancel()
 
 
+# High-frequency polling paths that would drown signal at INFO level
+_NOISY_PATHS = frozenset({
+    "/api/v1/health", "/api/v1/benchmark",
+    "/api/v1/system", "/api/v1/capacity",
+})
+
 # ── Request correlation middleware ────────────────────────────────────────────
 class _ReqLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         rid = uuid.uuid4().hex[:6]
         request.state.rid = rid
-        logger.info(f"[{rid}] → {request.method} {request.url.path}")
+        noisy = request.url.path in _NOISY_PATHS
+        if not noisy:
+            logger.info(f"[{rid}] → {request.method} {request.url.path}")
         t0 = time.perf_counter()
         response = await call_next(request)
         ms = (time.perf_counter() - t0) * 1000
-        logger.info(f"[{rid}] ← {response.status_code} in {ms:.1f}ms")
+        if noisy:
+            logger.debug(f"[poll] {request.url.path} → {response.status_code} ({ms:.1f}ms)")
+        else:
+            logger.info(f"[{rid}] ← {response.status_code} in {ms:.1f}ms")
         return response
 
 
@@ -260,6 +274,13 @@ class KioskSessionRequest(BaseModel):
 class KioskRouteRequest(BaseModel):
     session_id:          str
     eligibility_answers: dict
+
+
+class KioskReserveRequest(BaseModel):
+    session_id:       str
+    facility_name:    str = Field(..., max_length=200)
+    facility_address: str = Field(..., max_length=300)
+    pillar:           str = Field(..., max_length=40)
 
 
 class BriefingRequest(BaseModel):
@@ -393,6 +414,24 @@ async def telemetry_summary():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class _ClientLogEvent(BaseModel):
+    event:   str = Field(..., max_length=120)
+    level:   str = Field("info", pattern=r"^(debug|info|warn|error)$")
+    session: str | None = Field(None, max_length=32)
+    data:    dict = {}
+
+
+@app.post("/api/v1/client-log", status_code=204)
+async def client_log(payload: _ClientLogEvent):
+    """Receive structured log events from the browser and write them to the server log."""
+    level_map = {"debug": logging.DEBUG, "info": logging.INFO,
+                 "warn": logging.WARNING, "error": logging.ERROR}
+    lv  = level_map.get(payload.level, logging.INFO)
+    ctx = f" session={payload.session}" if payload.session else ""
+    extra = f"  {payload.data}" if payload.data else ""
+    logger.log(lv, f"[CLIENT] {payload.event}{ctx}{extra}")
 
 
 @app.post("/api/v1/transcribe")
@@ -598,7 +637,11 @@ async def kiosk_session(req: KioskSessionRequest, request: Request):
 
     session = create_session(payload, (req.origin_lat, req.origin_lon))
     questions = resolve_eligibility_questions(payload)
-    logger.info(f"[{rid}] session={session.session_id} questions={len(questions)}")
+    logger.info(
+        f"[{rid}] session={session.session_id} "
+        f"questions={len(questions)} "
+        f"next_step={'collect_eligibility' if questions else 'route'}"
+    )
 
     return {
         "crisis":                False,
@@ -620,9 +663,17 @@ async def kiosk_route(req: KioskRouteRequest, request: Request):
         raise HTTPException(status_code=404, detail="Session expired or not found")
 
     draft = session.payload_draft.model_dump()
+    # Log which fields the eligibility answers actually changed
+    changed = {k: v for k, v in req.eligibility_answers.items()
+               if v is not None and draft.get(k) != v}
     draft.update({k: v for k, v in req.eligibility_answers.items() if v is not None})
     payload = NeedsPayload(**draft)
-    logger.info(f"[{rid}] kiosk merged payload {payload.model_dump()}")
+    logger.info(
+        f"[{rid}] kiosk eligibility_delta={changed or 'none'}  "
+        f"gender={payload.gender}  sector={payload.sector}  "
+        f"has_id={payload.has_id}  sobriety={payload.sobriety_status}  "
+        f"group={payload.group_size}"
+    )
 
     gpu_mode = EngineMode.GPU if _rapids_mode == "gpu" else EngineMode.CPU
 
@@ -638,9 +689,14 @@ async def kiosk_route(req: KioskRouteRequest, request: Request):
         raise HTTPException(status_code=500, detail="Routing engine error — please try again")
 
     itinerary, gpu_ms = gpu_result
+    # Build a compact summary: pillar → top result name + distance for log analysis
+    summary = {
+        pillar: f"{results[0]['name'][:30]} ({results[0]['distance_km']:.1f}km)"
+        for pillar, results in itinerary.items() if results
+    }
     logger.info(
-        f"[{rid}] kiosk solve {gpu_ms:.1f}ms "
-        f"results={' '.join(f'{k}:{len(v)}' for k,v in itinerary.items())}"
+        f"[{rid}] kiosk solve {gpu_ms:.1f}ms  "
+        f"pillars={list(summary.keys())}  top={summary}"
     )
 
     if isinstance(cpu_result, Exception):
@@ -659,6 +715,142 @@ async def kiosk_route(req: KioskRouteRequest, request: Request):
         "itinerary":    itinerary,
         "tts_script":   build_tts_itinerary_script(itinerary),
         "gpu_solve_ms": round(gpu_ms, 2),
+    }
+
+
+@app.post("/api/v1/kiosk/reserve")
+async def kiosk_reserve(req: KioskReserveRequest, request: Request):
+    rid = getattr(request.state, "rid", "?")
+    if not reservation_store:
+        raise HTTPException(status_code=503, detail="Reservation store not initialised")
+    # Verify the session exists so codes can only be issued after a real route
+    session = get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session expired or not found")
+    try:
+        result = reservation_store.create(
+            session_id=req.session_id,
+            facility_name=req.facility_name,
+            facility_address=req.facility_address,
+            pillar=req.pillar,
+        )
+    except Exception as exc:
+        logger.error(f"[{rid}] reservation create failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not create reservation")
+    logger.info(f"[{rid}] reservation code={result['code']} facility={req.facility_name!r}")
+    return result
+
+
+@app.get("/api/v1/kiosk/reserve/{code}")
+async def kiosk_reserve_lookup(code: str):
+    if not reservation_store:
+        raise HTTPException(status_code=503, detail="Reservation store not initialised")
+    result = reservation_store.lookup(code.upper())
+    if result is None:
+        raise HTTPException(status_code=404, detail="Reservation code not found")
+    return result
+
+
+@app.get("/api/v1/nearby")
+async def nearby_services(lat: float, lon: float, radius_km: float = 2.0, limit: int = 60):
+    """
+    Return all services across all datasets within radius_km of (lat, lon),
+    sorted by walking distance. Used by the kiosk Browse Nearby panel.
+    No GPU, no KNN — simple Haversine in pandas.
+    """
+    if not datasets_cpu:
+        raise HTTPException(status_code=503, detail="Datasets not loaded")
+    if radius_km > 10:
+        radius_km = 10.0
+
+    import numpy as np
+    import pandas as pd
+
+    # Map dataset key → display pillar name
+    PILLAR_MAP = {
+        "shelters":    "shelter",
+        "food":        "food",
+        "grassroots":  "food",
+        "rehab":       "rehab",
+        "hygiene":     "hygiene",
+        "youth_spaces":"youth",
+        "libraries":   "library",
+        "respite":     "respite",
+    }
+    NAME_COLS    = ["organization_name", "ORGANIZATION_NAME", "name"]
+    ADDRESS_COLS = ["address", "SHELTER_ADDRESS", "LOCATION_ADDRESS"]
+
+    R = 6371.0
+    lat_r = np.radians(lat)
+    lon_r = np.radians(lon)
+    results = []
+
+    for ds_key, pillar in PILLAR_MAP.items():
+        df = datasets_cpu.get(ds_key)
+        if df is None:
+            continue
+        try:
+            pdf = df.to_pandas() if hasattr(df, "to_pandas") else df
+            if pdf.empty:
+                continue
+            # Bounding-box pre-filter (≈ 10× faster than full haversine)
+            lat_deg = radius_km / 111.0
+            lon_deg = radius_km / (111.0 * np.cos(np.radians(lat)))
+            box = pdf[
+                (pdf["lat"].between(lat - lat_deg, lat + lat_deg)) &
+                (pdf["lon"].between(lon - lon_deg, lon + lon_deg))
+            ]
+            if box.empty:
+                continue
+            # Exact Haversine
+            dlat = np.radians(box["lat"].values - lat)
+            dlon = np.radians(box["lon"].values - lon)
+            a = np.sin(dlat / 2) ** 2 + np.cos(lat_r) * np.cos(np.radians(box["lat"].values)) * np.sin(dlon / 2) ** 2
+            dist_km = R * 2 * np.arcsin(np.sqrt(a))
+            within = dist_km <= radius_km
+            box = box[within].copy()
+            box["_dist_km"] = dist_km[within]
+            if box.empty:
+                continue
+
+            for _, row in box.iterrows():
+                name = next((str(row[c]) for c in NAME_COLS if c in row.index and row[c]), "Unknown")
+                addr = next((str(row[c]) for c in ADDRESS_COLS if c in row.index and row[c]), "")
+                d    = float(row["_dist_km"])
+                results.append({
+                    "pillar":             pillar,
+                    "name":               name,
+                    "address":            addr,
+                    "lat":                float(row["lat"]),
+                    "lon":                float(row["lon"]),
+                    "distance_km":        round(d, 2),
+                    "distance_walk_min":  int(round(d / 0.084)),
+                    "hours":              str(row.get("hours", "")),
+                    "phone":              str(row.get("phone", "")),
+                    "requires_id":        bool(row.get("requires_id", False)),
+                    "harm_reduction":     bool(row.get("harm_reduction", True)),
+                    "transit_accessible": False,  # not computed here — kept fast
+                    "open_now":           None,    # client-side filter optional
+                    "bypass_pathway":     str(row.get("bypass_pathway", "")),
+                    "intake_preparation": str(row.get("intake_preparation", "")),
+                })
+        except Exception as exc:
+            logger.warning(f"[nearby] dataset={ds_key} error: {exc}")
+            continue
+
+    # Deduplicate by (name, address) keeping closest entry, then sort
+    seen: set[tuple] = set()
+    deduped = []
+    for s in sorted(results, key=lambda x: x["distance_km"]):
+        key = (s["name"].lower(), s["address"].lower())
+        if key not in seen:
+            seen.add(key)
+            deduped.append(s)
+
+    return {
+        "services": deduped[:limit],
+        "total":    len(deduped),
+        "radius_km": radius_km,
     }
 
 

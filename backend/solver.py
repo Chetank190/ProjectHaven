@@ -103,6 +103,11 @@ def _apply_masks(payload: NeedsPayload, datasets: dict, pd_engine) -> dict:
             }
             allowed = sector_map.get(payload.sector, [])
             m = m & df["SECTOR"].isin(allowed)
+        # Gender filter — only applied outside youth sector (youth shelters are mixed)
+        if payload.gender == "male" and payload.sector != "youth":
+            m = m & df["SECTOR"].isin(["Men", "Co-ed", "Mixed Adult"])
+        elif payload.gender == "female" and payload.sector != "youth":
+            m = m & df["SECTOR"].isin(["Women", "Co-ed", "Mixed Adult", "Families"])
         if payload.group_size == "with_family":
             m = m & df["SECTOR"].isin(["Families"])
         masked["shelter"] = df[m].copy()
@@ -265,6 +270,8 @@ def is_open_now(hours_str: str, now: datetime = None) -> bool:
 
 def _score_and_rank(df, indices, distances_km, stops_df, pillar_name: str) -> list:
     """Compute composite score and return sorted result list."""
+    import numpy as np
+
     try:
         idx_list  = indices[0].tolist()
         dist_list = distances_km[0].tolist()
@@ -272,23 +279,47 @@ def _score_and_rank(df, indices, distances_km, stops_df, pillar_name: str) -> li
         idx_list  = list(indices[0])
         dist_list = list(distances_km[0])
 
-    max_dist = max(dist_list) if dist_list else 1.0
-    max_dist = max_dist if max_dist > 0 else 1.0
-    results = []
+    if not idx_list:
+        return []
 
-    # Convert to pandas for row-level access (works for both pandas and cuDF)
-    pdf = df.to_pandas() if hasattr(df, "to_pandas") else df
+    # GPU residency: extract only the K candidate rows before copying to host.
+    # On cuDF, .iloc[[...]] stays in unified memory; .to_pandas() then transfers
+    # just K rows (typically 9-27) rather than the full masked dataset (up to
+    # 1,600 rows for respite). On pandas this is a cheap no-op slice.
+    try:
+        cand_df = df.iloc[[int(i) for i in idx_list]]
+    except Exception:
+        cand_df = df
+    pdf       = cand_df.to_pandas() if hasattr(cand_df, "to_pandas") else cand_df
     stops_pdf = stops_df.to_pandas() if hasattr(stops_df, "to_pandas") else stops_df
 
-    now = datetime.now()
-    for idx, dist_km in zip(idx_list, dist_list):
-        row     = pdf.iloc[int(idx)]
-        occ_raw = row.get("occupancy_ratio")
-        occ     = float(occ_raw) if occ_raw is not None else 0.5
-        transit = _check_transit(float(row["lat"]), float(row["lon"]), stops_pdf)
-        hours   = str(row.get("hours", ""))
+    # Candidate rows are now sequential in pdf (position 0…K-1)
+    cand_rows = [pdf.iloc[j] for j in range(len(pdf))]
+
+    # Batch transit check: one vectorized broadcast over all stops × all candidates.
+    lat_deg   = TRANSIT_RADIUS_M / 111_000
+    lon_deg   = TRANSIT_RADIUS_M / 80_000
+    stop_lats = stops_pdf["lat"].values
+    stop_lons = stops_pdf["lon"].values
+    cand_lats = np.array([float(r["lat"]) for r in cand_rows], dtype="float32")
+    cand_lons = np.array([float(r["lon"]) for r in cand_rows], dtype="float32")
+    transit_flags: list[bool] = np.any(
+        (np.abs(stop_lats[:, None] - cand_lats[None, :]) < lat_deg) &
+        (np.abs(stop_lons[:, None] - cand_lons[None, :]) < lon_deg),
+        axis=0,
+    ).tolist()
+
+    max_dist = max(dist_list) if dist_list else 1.0
+    max_dist = max_dist if max_dist > 0 else 1.0
+    results  = []
+    now      = datetime.now()
+
+    for row, dist_km, transit in zip(cand_rows, dist_list, transit_flags):
+        occ_raw  = row.get("occupancy_ratio")
+        occ      = float(occ_raw) if occ_raw is not None else 0.5
+        hours    = str(row.get("hours", ""))
         open_now = is_open_now(hours, now)
-        score   = (
+        score    = (
             WEIGHT_DISTANCE  * (dist_km / max_dist) +
             WEIGHT_OCCUPANCY * occ +
             WEIGHT_TRANSIT   * (0.0 if transit else 1.0)
@@ -330,19 +361,6 @@ def _score_and_rank(df, indices, distances_km, stops_df, pillar_name: str) -> li
 
     return sorted(results, key=lambda x: x["composite_score"])
 
-
-def _check_transit(lat: float, lon: float, stops_df) -> bool:
-    """Bounding-box transit proximity check (fast approximation — no haversine)."""
-    try:
-        lat_deg = TRANSIT_RADIUS_M / 111_000
-        lon_deg = TRANSIT_RADIUS_M / 80_000
-        nearby = stops_df[
-            (abs(stops_df["lat"] - lat) < lat_deg) &
-            (abs(stops_df["lon"] - lon) < lon_deg)
-        ]
-        return len(nearby) > 0
-    except Exception:
-        return False
 
 
 if __name__ == "__main__":

@@ -43,6 +43,7 @@ class NeedsPayload(BaseModel):
     has_id:              bool | None = None
     sobriety_status:     str | None = None
     group_size:          str | None = None
+    gender:              str | None = None
 
     @field_validator("sector")
     @classmethod
@@ -58,6 +59,11 @@ class NeedsPayload(BaseModel):
     @classmethod
     def group_valid(cls, v):
         return v if v in {"alone", "with_family", None} else None
+
+    @field_validator("gender")
+    @classmethod
+    def gender_valid(cls, v):
+        return v if v in {"male", "female", "non_binary", None} else None
 
 
 def _nim_tiers() -> list[tuple[str, str, str]]:

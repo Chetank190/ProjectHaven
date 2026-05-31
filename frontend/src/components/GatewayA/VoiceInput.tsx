@@ -94,6 +94,7 @@ export function VoiceInput({ onSubmit, loading, placeholder = 'Type or speak cli
             <button
               onMouseDown={startListening}
               onMouseUp={stopListening}
+              onMouseLeave={stopListening}
               onTouchStart={startListening}
               onTouchEnd={stopListening}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all flex-shrink-0"

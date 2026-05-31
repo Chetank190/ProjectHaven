@@ -1,8 +1,8 @@
 # Haven Matrix — Implementation Reference & LLM Handoff
 
-> **Last updated:** 2026-05-30 (Session 10 — EDA integration, auth, map view, returning-client detection, capacity ticker, speech improvements)
-> **Last commit:** `d1b8de0` (uncommitted changes since then — auth, case store wiring, speech, map, EDA data)
-> **Status:** Fully functional in CPU/NIM mode. Auth working (register/login/JWT). Case store saving cases. Map view active. Capacity ticker polling. Speech on `en-IN`. Cloud NIM active if `NGC_API_KEY` set. GPU path requires RAPIDS container on GX10. Frontend on `:5173`.
+> **Last updated:** 2026-05-30 (Session 12 — kiosk bug fixes, data sources documented, ASR clarification, injection detection verified)
+> **Last commit:** `a10a064` (uncommitted changes since — kiosk fixes, solver vectorization, pii_scrubber, async startup)
+> **Status:** Fully functional in CPU/NIM mode. Auth working (register/login/JWT). Case store saving cases. Map view active. Capacity ticker polling. Kiosk speech stable (mic/TTS isolated, bug fixes applied). Cloud NIM active if `NGC_API_KEY` set. GPU path requires RAPIDS container on GX10. Frontend on `:5173`.
 
 This document is the authoritative source for continuing work on Haven Matrix. It covers the complete current state of every module, all session changes, known issues, and how to extend the system.
 

@@ -66,26 +66,12 @@ export function CaseworkerPage() {
     }
   };
 
-  const handleConfirm = async (confirmed: NeedsPayload) => {
-    if (JSON.stringify(confirmed) !== JSON.stringify(payload)) {
-      setLoading(true);
-      try {
-        const r = await api.post<CaseworkerRouteResponse>('/caseworker/route', {
-          text:        pendingText,
-          origin_lat:  originLat,
-          origin_lon:  originLon,
-          client_name: clientName || undefined,
-        });
-        setRouteResult(r.data);
-        setStep('routed');
-      } catch {
-        setError('Re-route failed. Showing previous results.');
-        setStep('routed');
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
+  const handleConfirm = (confirmed: NeedsPayload) => {
+    // Store the caseworker's edits and proceed — the itinerary was already generated
+    // from the first route call. Re-posting the same text would produce the same result
+    // (the LLM re-compiles from text, not from the confirmed payload), so the round-trip
+    // adds latency without changing the itinerary.
+    setPayload(confirmed);
     setStep('routed');
   };
 

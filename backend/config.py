@@ -50,8 +50,9 @@ NIM_MAX_RETRIES = 2
 # When true, skip cuDF/cuML — reserve GPU for LLM only (Gemma NIM / llama.cpp)
 FORCE_CPU_SOLVER = os.environ.get("FORCE_CPU_SOLVER", "0").lower() in ("1", "true", "yes")
 
-# ── ASR NIM (Parakeet-0.6B-CTC) ───────────────────────────────────────────────
+# ── ASR NIM (Parakeet-1.1B-TDT) ───────────────────────────────────────────────
 # Tier 1 — local NIM container on GX10 GPU (port 9000)
+# Image: nvcr.io/nim/nvidia/parakeet-tdt-1.1b-asr:latest
 ASR_NIM_URL     = os.environ.get("ASR_NIM_URL",   "http://localhost:9000")
 # Tier 2 — NVIDIA cloud ASR (requires NGC_API_KEY; audio leaves device)
 ASR_CLOUD_URL   = os.environ.get("ASR_CLOUD_URL", "https://integrate.api.nvidia.com/v1")
@@ -104,6 +105,8 @@ VOICE_ELIGIBILITY_WAIT_SEC = 30
 VOICE_MIN_TRANSCRIPT_CHARS = 10
 
 # ── Eligibility question triggers ─────────────────────────────────────────────
+ASK_GENDER_FOR_PILLARS   = ["shelter"]           # gender-specific shelters exist
+ASK_AGE_FOR_PILLARS      = ["shelter"]           # youth vs adult shelter pools differ
 ASK_ID_FOR_PILLARS       = ["shelter", "rehab"]
 ASK_SOBRIETY_FOR_PILLARS = ["shelter"]
 ASK_GROUP_FOR_PILLARS    = ["shelter"]
