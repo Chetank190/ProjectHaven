@@ -94,6 +94,19 @@ export function KioskPage() {
     setKioskState('hub_select');
   };
 
+  // Single clean path into the text fallback from any voice screen. Tears down
+  // TTS, recognition, and any in-progress recording so no mic is left open.
+  const switchToTyping = async () => {
+    cLog('typing.switch', { from: kioskStateRef.current });
+    stopSpeaking();
+    stopListening();
+    await stopRecording();   // discard any in-progress audio blob
+    clearTranscript();
+    setError(null);
+    setTypedText('');
+    setKioskState('typing');
+  };
+
   const handleOrbTap = async () => {
     if (kioskState === 'idle' || kioskState === 'done') {
       stopSpeaking();
@@ -130,10 +143,9 @@ export function KioskPage() {
 
     if (!captured || captured.trim().length < VOICE_MIN_CHARS) {
       cWarn('recording.too_short', { chars: captured.length, source: transcriptSource });
-      setTypedText('');
       speak(
         "Sorry, I couldn't hear that clearly. Tap the button to try again, or tap the keyboard icon below to type instead.",
-        () => setKioskState('typing'),
+        () => { switchToTyping(); },
       );
       setKioskState('done');
       return;
@@ -585,6 +597,7 @@ export function KioskPage() {
           questions={questions}
           onComplete={onEligibilityComplete}
           onSkip={() => sessionId && submitRoute(sessionId, {})}
+          onType={switchToTyping}
         />
       </div>
     );
@@ -653,7 +666,7 @@ export function KioskPage() {
         {(kioskState === 'idle' || kioskState === 'done') && (
           <button
             tabIndex={-1}
-            onClick={() => { clearTranscript(); setTypedText(''); setKioskState('typing'); }}
+            onClick={switchToTyping}
             className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 px-5 py-2.5 rounded-full transition-all"
             style={{
               color: 'rgba(114,200,226,0.30)',
@@ -662,6 +675,24 @@ export function KioskPage() {
               fontSize: '0.8rem',
             }}>
             ⌨️ Can't speak? Type instead
+          </button>
+        )}
+
+        {/* Escape hatch while recording — bail to typing without finishing the take.
+            tabIndex={-1} keeps Tab on the VoiceOrb (AGENTS.md Rule 6). Shown only in
+            'recording' (not 'processing') to avoid racing an in-flight session request. */}
+        {kioskState === 'recording' && (
+          <button
+            tabIndex={-1}
+            onClick={switchToTyping}
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 px-5 py-2.5 rounded-full transition-all"
+            style={{
+              color: 'rgba(114,200,226,0.30)',
+              border: '1px solid rgba(56,174,210,0.10)',
+              background: 'rgba(26,147,187,0.04)',
+              fontSize: '0.8rem',
+            }}>
+            ⌨️ Type instead
           </button>
         )}
       </div>

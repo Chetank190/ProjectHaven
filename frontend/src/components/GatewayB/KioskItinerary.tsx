@@ -45,7 +45,7 @@ function directionsUrl(lat: number, lon: number): string {
 }
 
 export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, originLon, hubName, onReserve }: Props) {
-  const { speak, isSpeaking } = useSpeech();
+  const { speak, stopSpeaking, isSpeaking } = useSpeech();
   const mapRef     = useRef<HTMLDivElement>(null);
   const leafletRef = useRef<unknown>(null);
 
@@ -57,7 +57,7 @@ export function KioskItinerary({ itinerary, ttsScript, onReset, originLat, origi
 
   useEffect(() => {
     speak(ttsScript);
-    return () => window.speechSynthesis.cancel();
+    return () => stopSpeaking();
   }, []);
 
   const stops = Object.entries(itinerary)
