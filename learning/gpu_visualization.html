@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Haven Matrix — GPU &amp; ML Architecture</title>
+<style>
+  :root {
+    --bg:#0A1E2E; --bg2:#0D2436; --bg3:#061825;
+    --ocean300:#72C8E2; --ocean400:#38AED2; --ocean500:#1A93BB; --ocean600:#1A7A9A;
+    --sage:#3A8A71; --sage300:#80C0AA;
+    --amber:#FBBF24; --amber600:#B45309;
+    --ink:rgba(255,255,255,0.92); --muted:rgba(255,255,255,0.55); --faint:rgba(255,255,255,0.32);
+    --card:rgba(255,255,255,0.04); --line:rgba(56,174,210,0.20);
+    --green:#3A8A71; --yellow:#D97706; --red:#EF4444;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:'Inter',system-ui,-apple-system,sans-serif;
+    background:linear-gradient(160deg,var(--bg) 0%,var(--bg2) 55%,var(--bg3) 100%);
+    color:var(--ink); -webkit-font-smoothing:antialiased; line-height:1.55;
+    padding:0 0 80px;
+  }
+  .wrap { max-width:1080px; margin:0 auto; padding:0 24px; }
+  header { padding:56px 0 28px; text-align:center; }
+  .badge { display:inline-block; font-size:12px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--ocean300); border:1px solid var(--line); border-radius:999px; padding:6px 16px; margin-bottom:18px; }
+  h1 { font-size:2.4rem; font-weight:700; margin:0 0 8px; letter-spacing:-.02em; }
+  h1 .accent { color:var(--ocean400); }
+  .sub { color:var(--muted); font-size:1.05rem; max-width:640px; margin:0 auto; }
+  h2 { font-size:1.35rem; margin:48px 0 4px; font-weight:600; }
+  h2 .num { color:var(--ocean400); font-variant-numeric:tabular-nums; margin-right:10px; }
+  .lead { color:var(--muted); margin:0 0 20px; }
+  section { scroll-margin-top:20px; }
+
+  /* ── workload cards ── */
+  .grid3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px;
+    position:relative; overflow:hidden; }
+  .card .ico { font-size:1.8rem; }
+  .card h3 { margin:10px 0 4px; font-size:1.1rem; }
+  .card .tech { font-size:.82rem; color:var(--ocean300); font-family:ui-monospace,monospace; margin-bottom:12px; }
+  .card p { font-size:.9rem; color:var(--muted); margin:0 0 14px; }
+  .verdict { display:inline-flex; align-items:center; gap:7px; font-size:.8rem; font-weight:600;
+    padding:6px 12px; border-radius:999px; }
+  .v-must  { background:rgba(58,138,113,0.18); color:var(--sage300); border:1px solid rgba(58,138,113,0.4); }
+  .v-strong{ background:rgba(56,174,210,0.15); color:var(--ocean300); border:1px solid rgba(56,174,210,0.4); }
+  .v-scale { background:rgba(217,119,6,0.15); color:var(--amber); border:1px solid rgba(217,119,6,0.4); }
+  .meter { height:6px; border-radius:999px; background:rgba(255,255,255,0.08); margin-top:16px; overflow:hidden; }
+  .meter > i { display:block; height:100%; border-radius:999px; }
+
+  /* ── pipeline ── */
+  .pipe { display:flex; flex-wrap:wrap; align-items:stretch; gap:0; margin-top:8px;
+    background:var(--card); border:1px solid var(--line); border-radius:18px; padding:10px; }
+  .stage { flex:1; min-width:150px; padding:16px 14px; text-align:center; position:relative; }
+  .stage + .stage::before { content:'→'; position:absolute; left:-10px; top:50%; transform:translateY(-50%);
+    color:var(--ocean400); font-size:1.1rem; }
+  .stage .t { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:var(--faint); }
+  .stage .m { font-weight:600; margin:4px 0 2px; font-size:.95rem; }
+  .stage .d { font-size:.78rem; color:var(--muted); }
+  .chip-gpu { display:inline-block; font-size:.62rem; font-weight:700; letter-spacing:.08em;
+    background:rgba(58,138,113,0.2); color:var(--sage300); padding:2px 7px; border-radius:6px; margin-top:6px; }
+  .chip-cpu { display:inline-block; font-size:.62rem; font-weight:700; letter-spacing:.08em;
+    background:rgba(255,255,255,0.08); color:var(--faint); padding:2px 7px; border-radius:6px; margin-top:6px; }
+
+  /* ── unified memory diagram ── */
+  .mem { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:24px; margin-top:8px; }
+  .membar { border:1.5px dashed rgba(56,174,210,0.4); border-radius:14px; padding:14px; display:flex; gap:12px; flex-wrap:wrap; }
+  .memblock { flex:1; min-width:140px; border-radius:10px; padding:14px; text-align:center; font-size:.85rem; }
+  .mb1 { background:linear-gradient(135deg,#0F4259,#1A7A9A); }
+  .mb2 { background:linear-gradient(135deg,#1D4238,#2E6E59); }
+  .mb3 { background:linear-gradient(135deg,#155F79,#1A93BB); }
+  .memcap { text-align:center; color:var(--ocean300); font-size:.8rem; margin-top:12px; letter-spacing:.04em; }
+  .zerocopy { text-align:center; color:var(--sage300); font-size:.85rem; font-weight:600; margin-top:6px; }
+
+  /* ── honest bench ── */
+  .bench { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:24px; margin-top:8px; }
+  .benchrow { display:flex; align-items:center; gap:14px; margin:14px 0; }
+  .benchrow .lbl { width:170px; font-size:.85rem; color:var(--muted); flex-shrink:0; }
+  .track { flex:1; height:26px; background:rgba(255,255,255,0.06); border-radius:8px; position:relative; overflow:hidden; }
+  .track > span { position:absolute; left:0; top:0; height:100%; border-radius:8px; display:flex;
+    align-items:center; padding-left:10px; font-size:.75rem; font-weight:600; color:#06141d; }
+  .callout { border-left:3px solid var(--amber); background:rgba(251,191,36,0.07);
+    padding:14px 18px; border-radius:0 12px 12px 0; margin-top:18px; font-size:.92rem; color:var(--ink); }
+  .callout b { color:var(--amber); }
+
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:.88rem; }
+  th,td { text-align:left; padding:11px 12px; border-bottom:1px solid rgba(255,255,255,0.07); vertical-align:top; }
+  th { color:var(--ocean300); font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; }
+  td .k { font-family:ui-monospace,monospace; color:var(--ocean300); font-size:.82rem; }
+
+  .pills { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
+  .pill { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px;
+    font-size:.9rem; color:var(--muted); flex:1; min-width:240px; }
+  .pill b { color:var(--ocean300); display:block; margin-bottom:4px; font-size:.82rem; }
+
+  footer { text-align:center; color:var(--faint); font-size:.8rem; margin-top:56px; }
+  .legend { display:flex; gap:18px; justify-content:center; flex-wrap:wrap; margin-top:14px; font-size:.78rem; color:var(--muted); }
+  .legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:6px; vertical-align:middle; }
+  @media (prefers-reduced-motion: no-preference) {
+    .track > span, .meter > i { transition:width 1s cubic-bezier(.2,.7,.2,1); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="badge">NVIDIA Spark Hack Toronto · GX10</div>
+    <h1>Haven Matrix — <span class="accent">GPU &amp; ML</span> Architecture</h1>
+    <p class="sub">How the models run on the GPU, and an <b>honest</b> account of where the
+      accelerator is mandatory, where it's strongly justified, and where it's a pattern
+      built to scale. A dual-gateway social-services triage system.</p>
+  </header>
+
+  <!-- 1. THREE WORKLOADS -->
+  <section>
+    <h2><span class="num">01</span>Three workloads, one device</h2>
+    <p class="lead">Haven Matrix runs three independent ML workloads on a single GX10. They differ sharply in how much they actually need a GPU — and we say so plainly.</p>
+    <div class="grid3">
+
+      <div class="card">
+        <div class="ico">🧠</div>
+        <h3>LLM Triage</h3>
+        <div class="tech">Nemotron-30B / Gemma 3n E4B</div>
+        <p>Caseworker notes &amp; kiosk speech → strict <code>NeedsPayload</code> JSON. Deterministic compiler (temp 0), not a decision-maker.</p>
+        <span class="verdict v-must">● GPU mandatory</span>
+        <div class="meter"><i style="width:100%;background:var(--green)"></i></div>
+      </div>
+
+      <div class="card">
+        <div class="ico">🎙️</div>
+        <h3>Speech Recognition</h3>
+        <div class="tech">Parakeet-1.1B-TDT (NIM)</div>
+        <p>Kiosk voice → transcript, on-device. Audio never leaves the box when the local NIM is up — a hard privacy boundary.</p>
+        <span class="verdict v-strong">● GPU strongly justified</span>
+        <div class="meter"><i style="width:88%;background:var(--ocean400)"></i></div>
+      </div>
+
+      <div class="card">
+        <div class="ico">📍</div>
+        <h3>Geospatial Solve</h3>
+        <div class="tech">cuML KNN + cuDF (haversine)</div>
+        <p>Constraint-masked nearest-eligible-service search. Correct &amp; GPU-native today; the real payoff arrives at city→country scale.</p>
+        <span class="verdict v-scale">● GPU = scaling story</span>
+        <div class="meter"><i style="width:42%;background:var(--yellow)"></i></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 2. PIPELINE -->
+  <section>
+    <h2><span class="num">02</span>Request pipeline</h2>
+    <p class="lead">A kiosk utterance flows through up to three GPU stages, each with a CPU fallback.</p>
+    <div class="pipe">
+      <div class="stage">
+        <div class="t">Input</div>
+        <div class="m">Voice / Text</div>
+        <div class="d">browser capture</div>
+      </div>
+      <div class="stage">
+        <div class="t">Stage 1</div>
+        <div class="m">ASR</div>
+        <div class="d">Parakeet → transcript</div>
+        <div class="chip-gpu">GPU · fallback: Web Speech</div>
+      </div>
+      <div class="stage">
+        <div class="t">Stage 2</div>
+        <div class="m">LLM Compile</div>
+        <div class="d">text → needs JSON</div>
+        <div class="chip-gpu">GPU · fallback: regex</div>
+      </div>
+      <div class="stage">
+        <div class="t">Stage 3</div>
+        <div class="m">cuML Solve</div>
+        <div class="d">mask + KNN + score</div>
+        <div class="chip-gpu">GPU · fallback: sklearn</div>
+      </div>
+      <div class="stage">
+        <div class="t">Output</div>
+        <div class="m">Itinerary</div>
+        <div class="d">ranked stops + TTS</div>
+        <div class="chip-cpu">CPU</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. UNIFIED MEMORY -->
+  <section>
+    <h2><span class="num">03</span>Why the GX10's 128 GB unified memory</h2>
+    <p class="lead">The genuine hardware win isn't "KNN is faster." It's that the model <i>and</i> the city's data share one address space — zero-copy, fully offline.</p>
+    <div class="mem">
+      <div class="membar">
+        <div class="memblock mb1"><b>LLM weights</b><br/>Nemotron-30B / Gemma</div>
+        <div class="memblock mb2"><b>ASR model</b><br/>Parakeet-1.1B</div>
+        <div class="memblock mb3"><b>Geospatial data</b><br/>cuDF: 11 datasets</div>
+      </div>
+      <div class="memcap">◄──────────────  128 GB unified memory  ──────────────►</div>
+      <div class="zerocopy">cuDF ↔ cuML hand-off is zero-copy — no host↔device PCIe transfer</div>
+    </div>
+    <div class="pills">
+      <div class="pill"><b>Co-resident</b>Model + data + ASR in one memory space, no eviction.</div>
+      <div class="pill"><b>Offline</b>Full pipeline runs with no cloud round-trip — a demo requirement.</div>
+      <div class="pill"><b>Private</b>PII-scrubbed text and audio never leave the device.</div>
+    </div>
+  </section>
+
+  <!-- 4. THE HONEST PART -->
+  <section>
+    <h2><span class="num">04</span>The honest part: where GPU doesn't yet pay off</h2>
+    <p class="lead">Measured solve times are <b>~12–135 ms</b> (from <code>daily_telemetry.csv</code>). At today's data scale — hundreds of shelters, ~1,600 rows in the largest pillar — the KNN math is microseconds; the rest is Python/cuDF overhead.</p>
+
+    <div class="bench">
+      <div style="font-size:.8rem;color:var(--faint);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Relative solve cost — illustrative, by data scale</div>
+
+      <div class="benchrow">
+        <div class="lbl">Today (~few k rows)</div>
+        <div class="track">
+          <span style="width:34%;background:var(--yellow)">CPU ≈ GPU — a wash</span>
+        </div>
+      </div>
+      <div class="benchrow">
+        <div class="lbl">City-wide (~10⁵)</div>
+        <div class="track">
+          <span style="width:62%;background:var(--ocean400)">GPU pulls ahead</span>
+        </div>
+      </div>
+      <div class="benchrow">
+        <div class="lbl">Province/multi-city (~10⁶–10⁷)</div>
+        <div class="track">
+          <span style="width:94%;background:var(--green)">GPU decisive</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <b>Verdict for judges:</b> The LLM and ASR are the load-bearing GPU justification —
+        a 30B model and real-time STT are simply not CPU problems. The cuML solver is an
+        <b>honest demonstration</b> of a GPU-native data pattern that is correct and ready
+        for scale, deployed today on small data <b>for free</b> because the accelerator is
+        already hot for the model.
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--yellow)"></i>wash at this size</span>
+        <span><i style="background:var(--ocean400)"></i>GPU ahead</span>
+        <span><i style="background:var(--green)"></i>GPU decisive</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. MEASUREMENT -->
+  <section>
+    <h2><span class="num">05</span>Measurement &amp; graceful fallback</h2>
+    <p class="lead">Every GPU path degrades to CPU with no code change at the call site — the engine is an enum. Resilience, not GPU-dependence, is the boast.</p>
+    <table>
+      <thead><tr><th>Surface</th><th>What it proves</th><th>Fallback</th></tr></thead>
+      <tbody>
+        <tr><td><span class="k">solver.py --benchmark</span></td><td>GPU vs CPU solve + speedup, same payload</td><td>runs CPU-only if no RAPIDS</td></tr>
+        <tr><td><span class="k">GET /api/v1/benchmark</span></td><td>last GPU/CPU ms + speedup ratio</td><td>—</td></tr>
+        <tr><td><span class="k">GET /api/v1/system</span></td><td>live VRAM, GPU util %, temp (pynvml)</td><td>graceful on non-GPU dev</td></tr>
+        <tr><td><span class="k">LLM triage</span></td><td>3-tier NIM cascade</td><td>→ regex extractor</td></tr>
+        <tr><td><span class="k">ASR</span></td><td>on-device Parakeet</td><td>→ browser Web Speech</td></tr>
+        <tr><td><span class="k">cuML / cuDF</span></td><td>GPU solve + masking</td><td>→ sklearn / pandas</td></tr>
+        <tr><td><span class="k">FORCE_CPU_SOLVER</span></td><td>flips entire solve to CPU</td><td>env flag, zero code change</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 6. PITCH LINES -->
+  <section>
+    <h2><span class="num">06</span>One-line justifications</h2>
+    <div class="pills">
+      <div class="pill"><b>The mandate</b>A 30B local LLM and real-time ASR are not CPU problems.</div>
+      <div class="pill"><b>The memory</b>128 GB unified lets the model and the city's data share one address space, zero-copy, offline.</div>
+      <div class="pill"><b>The scale</b>The solver is GPU-native, so it grows from one city to a country with no rewrite.</div>
+      <div class="pill"><b>The resilience</b>Everything has a CPU fallback. The GPU makes it fast; it doesn't make it fragile.</div>
+    </div>
+  </section>
+
+  <footer>
+    Haven Matrix · companion to <code>learning/gpu_ml_learnings.md</code> · static HTML, no dependencies — open directly in any browser.
+  </footer>
+
+</div>
+</body>
+</html>
