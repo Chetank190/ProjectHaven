@@ -46,3 +46,40 @@ select {
   70%  { transform: scale(2.8); opacity: 0;    }
   100% { transform: scale(2.8); opacity: 0;    }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Accessibility & kiosk ergonomics
+   The kiosk is used by people who may be cold, shaking, low-vision, or on
+   older touch hardware. These rules raise the floor without touching any
+   component logic or layout sizing.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Respect the OS "reduce motion" setting — the orb pulse, wave bars, and
+   "you are here" ping can trigger vestibular discomfort. Near-instant, not
+   fully zero, so state changes are still perceptible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Stronger focus ring for keyboard / switch-access users (supersedes the basic
+   ring above). Halo keeps it visible on both the dark kiosk and the light
+   caseworker surfaces. Visual-only — does not affect layout or element size. */
+*:focus-visible {
+  outline: 3px solid #38AED2;
+  outline-offset: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 5px rgba(56, 174, 210, 0.25);
+}
+
+/* Printing a reservation slip / itinerary: drop decorative animation and force
+   high-contrast ink so the printed page is legible in black and white. */
+@media print {
+  [class*='animate-'] { animation: none !important; }
+}
