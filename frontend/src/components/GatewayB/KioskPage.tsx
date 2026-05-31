@@ -61,11 +61,12 @@ export function KioskPage() {
   const resetIdle = () => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
-      // Never interrupt active operations, typing mid-input, or the reservation
-      // code screen (user may still be reading / printing their code).
-      const noInterrupt = ['eligibility', 'routing', 'processing', 'typing', 'done', 'reserving', 'reservation_done'];
+      // Never interrupt active operations, typing mid-input, the reservation
+      // code screen (user may still be reading / printing their code), or the
+      // crisis screen (never auto-dismiss emergency guidance from under someone).
+      const noInterrupt = ['eligibility', 'routing', 'processing', 'typing', 'done', 'reserving', 'reservation_done', 'crisis'];
       if (noInterrupt.includes(kioskStateRef.current)) return;
-      window.speechSynthesis.cancel();
+      stopSpeaking();
       setKioskState('idle');
       setSessionId(null);
       setQuestions([]);
@@ -145,6 +146,10 @@ export function KioskPage() {
         crisisHospRef.current = [];
       });
       speak(esc, () => {
+        // The user may have dismissed the crisis screen before esc finished —
+        // tapping "return" calls stopSpeaking() → cancel(), which fires this
+        // onEnd. Don't announce a hospital onto the idle (or any other) screen.
+        if (kioskStateRef.current !== 'crisis') return;
         const er = crisisHospRef.current?.find(h => h.emergency);
         if (er) speak(`The closest emergency room is ${er.name}, about ${er.distance_drive_min} minutes away by car.`);
       });
