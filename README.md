@@ -58,7 +58,7 @@ cd frontend && npm install && npm run dev
 
 ```
 Mac (:3001 frontend, :8000 backend CPU)
-    │  NIM_ENDPOINT=http://100.81.85.39:8001/v1
+    │  NIM_ENDPOINT=http://<GX10_TAILSCALE_IP>:8001/v1
     ▼  Tailscale
 GX10 — docker compose up nim -d  (Gemma 3n on GPU :8001)
        optional: docker compose up asr -d  (Parakeet on GPU :9000)
@@ -73,10 +73,10 @@ GX10 — docker compose up nim -d  (Gemma 3n on GPU :8001)
 Mac `.env` (copy from `.env.example`):
 
 ```bash
-GX10_TAILSCALE_IP=100.81.85.39          # your unit's Tailscale IP
+GX10_TAILSCALE_IP=<GX10_TAILSCALE_IP>          # your unit's Tailscale IP
 FORCE_CPU_SOLVER=1
-NIM_ENDPOINT=http://100.81.85.39:8001/v1
-NIM_FALLBACK=http://100.81.85.39:8001/v1
+NIM_ENDPOINT=http://<GX10_TAILSCALE_IP>:8001/v1
+NIM_FALLBACK=http://<GX10_TAILSCALE_IP>:8001/v1
 ```
 
 **Model storage:** weights download automatically into Docker volume `nim-cache` on the GX10 on first NIM start (requires `NGC_API_KEY` in GX10 `.env`). Nothing is stored on the Mac.
@@ -97,23 +97,23 @@ The GX10 has **no built-in Wi-Fi**. Remote access info is on the pamphlet in the
 
 Connect **your laptop** to the GX10 hotspot (the GX10 auto-connects to saved hotspot profiles):
 
-**Your unit (gx10-3cd8):**
+**Your unit (gx10-XXXX):**
 | Field | Value |
 |-------|-------|
-| Hotspot SSID | `gx10-3cd8` |
-| Hotspot Password | `gx10-3cd8` |
+| Hotspot SSID | `gx10-XXXX` |
+| Hotspot Password | Printed on the pamphlet in the box |
 
 Open **Terminal** (Mac/Linux) or **PowerShell as Administrator** (Windows):
 
 ```bash
-ssh asus@gx10-3cd8.local
+ssh asus@gx10-XXXX.local
 ```
 
 When prompted:
 - Type `yes` and press Enter
-- Password: `password`
+- Password: the default printed on the pamphlet (change it with `passwd` after first login)
 
-> **No pamphlet?** Flip the unit over → read the **MAC1** sticker → use the last 4 characters (e.g. `3C:D8` → `gx10-3cd8`). Other units use the same pattern: `ssh asus@gx10-XXXX.local`.
+> **No pamphlet?** Flip the unit over → read the **MAC1** sticker → use the last 4 characters (e.g. `A1:B2` → `gx10-a1b2`). Other units use the same pattern: `ssh asus@gx10-XXXX.local`.
 
 ---
 
@@ -134,12 +134,12 @@ sudo tailscale up
 After pairing, SSH via Tailscale from anywhere:
 
 ```bash
-ssh asus@gx10-3cd8          # by hostname
+ssh asus@gx10-XXXX          # by hostname
 ssh asus@100.X.X.X          # by Tailscale IP (shown in Tailscale app)
 ```
 
 **Invite teammates:**
-- Team invite link: https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
+- Team invite link: (generate an invite in the Tailscale admin console; never commit invite links)
 - Or Tailscale admin console → **Invite by email** → teammate joins **Host tailnet**
 
 ---
@@ -150,7 +150,7 @@ The hotspot profile persists across reboots. To switch to venue Wi-Fi, connect a
 
 ```bash
 nmcli con show                        # list all connections
-nmcli con delete gx10-3cd8-Hotspot   # delete so it doesn't reconnect on reboot
+nmcli con delete gx10-XXXX-Hotspot   # delete so it doesn't reconnect on reboot
 ```
 
 ---
@@ -162,7 +162,7 @@ Backend and frontend run locally on the Mac. Only ensure Tailscale is Connected 
 If `:8001` is unreachable over Tailscale, tunnel the model port:
 
 ```bash
-ssh -L 8001:localhost:8001 asus@100.81.85.39
+ssh -L 8001:localhost:8001 asus@<GX10_TAILSCALE_IP>
 # then set NIM_ENDPOINT=http://localhost:8001/v1 in Mac .env
 ```
 
@@ -261,11 +261,11 @@ GX10 — NIM Gemma 3n :8001 (GPU)  [optional ASR :9000]
 
 ```bash
 # Mac .env — backend + frontend on Mac, models on GX10 (team default)
-GX10_TAILSCALE_IP=100.81.85.39
+GX10_TAILSCALE_IP=<GX10_TAILSCALE_IP>
 FORCE_CPU_SOLVER=1
-NIM_ENDPOINT=http://100.81.85.39:8001/v1
-NIM_FALLBACK=http://100.81.85.39:8001/v1
-ASR_NIM_URL=http://100.81.85.39:9000
+NIM_ENDPOINT=http://<GX10_TAILSCALE_IP>:8001/v1
+NIM_FALLBACK=http://<GX10_TAILSCALE_IP>:8001/v1
+ASR_NIM_URL=http://<GX10_TAILSCALE_IP>:9000
 NGC_API_KEY=your_ngc_key_here          # optional cloud LLM/ASR fallback
 NIM_API_KEY=not-needed
 VITE_KIOSK_HUB=Union Station
