@@ -4,9 +4,9 @@
 # Or:    bash scripts/gx10-setup-models.sh   (reads NGC_API_KEY from .env)
 set -euo pipefail
 
-GX10_HOST="${GX10_HOST:-100.81.85.39}"
+GX10_HOST="${GX10_HOST:-<GX10_TAILSCALE_IP>}"
 GX10_USER="${GX10_USER:-asus}"
-GX10_PASS="${GX10_PASS:-password}"
+GX10_PASS="${GX10_PASS:?Set GX10_PASS to the box password}"
 REMOTE_DIR="${REMOTE_DIR:-~/ProjectHaven}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
