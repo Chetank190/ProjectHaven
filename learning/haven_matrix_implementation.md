@@ -997,10 +997,10 @@ curl -s http://localhost:8000/api/v1/capacity | python3 -m json.tool
 See `learning/gx10_access_and_gpu_guide.md` for full SSH/Tailscale instructions.
 
 **Quick reference:**
-- Tailscale IP: `100.81.85.39`
-- SSH: `ssh chetankumar@100.81.85.39`
-- NIM endpoint: `http://100.81.85.39:8001/v1`
-- Set in `.env`: `NIM_ENDPOINT=http://100.81.85.39:8001/v1`
+- Tailscale IP: `<GX10_TAILSCALE_IP>`
+- SSH: `ssh chetankumar@<GX10_TAILSCALE_IP>`
+- NIM endpoint: `http://<GX10_TAILSCALE_IP>:8001/v1`
+- Set in `.env`: `NIM_ENDPOINT=http://<GX10_TAILSCALE_IP>:8001/v1`
 
 **EULA blocker:** `nvcr.io/nim/google/gemma-3n-e4b-it:latest` requires license acceptance at `https://build.nvidia.com/google/gemma-3n-e4b-it` before `docker pull` works.
 
