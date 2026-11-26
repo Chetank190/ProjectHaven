@@ -358,10 +358,10 @@ Expected: JSON with `compile_method: "regex"`, `itinerary` with shelter + food s
 
 **Quick SSH** (do this first, before any other step):
 ```bash
-# 1. Connect your laptop to hotspot SSID: gx10-3cd8  (password: gx10-3cd8)
+# 1. Connect your laptop to hotspot SSID: gx10-XXXX  (password: gx10-XXXX)
 # 2. Open Terminal / PowerShell Admin:
-ssh asus@gx10-3cd8.local
-# When prompted: type yes → then password: password
+ssh asus@gx10-XXXX.local
+# When prompted: type yes → then the default password from the pamphlet
 ```
 
 **Team default: models on GX10 GPU only; backend + frontend on Mac.** See [`gx10_access_and_gpu_guide.md`](gx10_access_and_gpu_guide.md).
@@ -381,7 +381,7 @@ Optional: `docker compose up asr -d` for Parakeet on GPU :9000.
 
 ```bash
 cp .env.example .env
-# NIM_ENDPOINT=http://100.81.85.39:8001/v1  FORCE_CPU_SOLVER=1
+# NIM_ENDPOINT=http://<GX10_TAILSCALE_IP>:8001/v1  FORCE_CPU_SOLVER=1
 
 source .vhaven/bin/activate
 set -a && source .env && set +a
@@ -394,14 +394,14 @@ cd frontend && npm run dev
 
 ```bash
 curl -s http://localhost:8000/api/v1/health        # rapids_mode: cpu
-curl -s http://100.81.85.39:8001/v1/models | head # GX10 model reachable
+curl -s http://<GX10_TAILSCALE_IP>:8001/v1/models | head # GX10 model reachable
 # POST /caseworker/route → compile_method: nim
 ```
 
 ### Use the UI from your laptop (SSH port-forward)
 
 ```bash
-ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
+ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-XXXX
 # Then open http://localhost:3000/caseworker on your laptop
 ```
 
@@ -829,14 +829,14 @@ Requires internet connection (OpenStreetMap tiles). On demo day, ensure the lapt
 ### Your Unit's Credentials
 
 ```
-Hotspot SSID:     gx10-3cd8
-Hotspot Password: gx10-3cd8
-SSH command:      ssh asus@gx10-3cd8.local
+Hotspot SSID:     gx10-XXXX
+Hotspot Password: gx10-XXXX
+SSH command:      ssh asus@gx10-XXXX.local
 Username:         asus
-Password:         password
+Password:         (default printed on the pamphlet)
 ```
 
-> Remote access info is on the pamphlet in the box. One or two units may lack a pamphlet — credentials pattern is the same. No pamphlet? Flip unit over → **MAC1** sticker → last 4 characters complete the name (e.g. `3C:D8` → `gx10-3cd8`).
+> Remote access info is on the pamphlet in the box. One or two units may lack a pamphlet — credentials pattern is the same. No pamphlet? Flip unit over → **MAC1** sticker → last 4 characters complete the name (e.g. `A1:B2` → `gx10-a1b2`).
 
 ---
 
@@ -848,20 +848,20 @@ The GX10 auto-connects to a saved hotspot profile. Connect **your laptop** to th
 
 | Field | Value |
 |-------|-------|
-| Hotspot SSID | `gx10-3cd8` |
-| Hotspot Password | `gx10-3cd8` |
+| Hotspot SSID | `gx10-XXXX` |
+| Hotspot Password | Printed on the pamphlet in the box |
 
 **Step 2 — SSH in**
 
 Open **Terminal** (Mac/Linux — preferred on Mac) or **PowerShell as Administrator** (Windows):
 
 ```bash
-ssh asus@gx10-3cd8.local
+ssh asus@gx10-XXXX.local
 ```
 
 When prompted:
 1. Type `yes` → press Enter (accepts the host key fingerprint)
-2. Password: `password` → press Enter
+2. Password: the default printed on the pamphlet (change it with `passwd` after first login) → press Enter
 
 You'll see the GX10 shell prompt when it works.
 
@@ -869,9 +869,9 @@ You'll see the GX10 shell prompt when it works.
 | Field | Value |
 |-------|-------|
 | Username | `asus` |
-| Password | `password` |
-| Hostname | `gx10-3cd8.local` |
-| SSH System Name | `asus@gx10-3cd8` |
+| Password | Default printed on the pamphlet |
+| Hostname | `gx10-XXXX.local` |
+| SSH System Name | `asus@gx10-XXXX` |
 
 > **Other units at the event** use the same pattern (`gx10-XXXX.local`) but with their own 4-character ID from the pamphlet or MAC1 sticker.
 
@@ -913,7 +913,7 @@ The GX10 is now in your Tailscale network.
 
 ```bash
 # By hostname:
-ssh asus@gx10-3cd8
+ssh asus@gx10-XXXX
 
 # By Tailscale IP (starts with 100.):
 ssh asus@100.X.X.X
@@ -926,14 +926,14 @@ ssh asus@100.X.X.X
 
 **Team invite link (Project Haven):**
 
-https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
+(generate an invite in the Tailscale admin console; never commit invite links)
 
 Or via admin console:
 
 1. Open the **Tailscale admin console** (tailscale.com → Admin Console)
 2. Click **Invite users** → **Invite by email**
 3. Teammate receives an email → installs Tailscale → prompted to join two tailnets → **choose your (the host's) email**
-4. Teammate can now SSH using: `ssh asus@gx10-3cd8` or `ssh asus@100.X.X.X`
+4. Teammate can now SSH using: `ssh asus@gx10-XXXX` or `ssh asus@100.X.X.X`
 
 ---
 
@@ -947,7 +947,7 @@ The hotspot profile is persistent — the GX10 will keep reconnecting to it on e
 
 ```bash
 nmcli con show                         # lists all saved connections
-nmcli con delete gx10-3cd8-Hotspot
+nmcli con delete gx10-XXXX-Hotspot
 ```
 
 This is permanent. After deletion, the GX10 will only connect to saved Wi-Fi networks.
@@ -957,7 +957,7 @@ This is permanent. After deletion, the GX10 will only connect to saved Wi-Fi net
 ### Using the UI from your laptop (SSH port-forward)
 
 ```bash
-ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
+ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-XXXX
 ```
 
 Then open http://localhost:3000/caseworker on your laptop while services run on the GX10.
@@ -968,25 +968,25 @@ Then open http://localhost:3000/caseworker on your laptop while services run on 
 
 ```
 YOUR UNIT:
-  Hotspot SSID/Password: gx10-3cd8
-  SSH:                   ssh asus@gx10-3cd8.local
-  Username / Password:   asus / password
+  Hotspot SSID/Password: gx10-XXXX
+  SSH:                   ssh asus@gx10-XXXX.local
+  Username / Password:   asus / (default printed on the pamphlet)
 
 INITIAL ACCESS:
-  Connect laptop to hotspot gx10-3cd8 → ssh asus@gx10-3cd8.local → yes → password
+  Connect laptop to hotspot gx10-XXXX → ssh asus@gx10-XXXX.local → yes → (default password)
 
 TAILSCALE SETUP (once):
   SSH in → sudo tailscale up → authorize URL in browser
-  Team invite: https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
+  Team invite: (generate an invite in the Tailscale admin console; never commit invite links)
 
 DAILY REMOTE ACCESS (after Tailscale):
-  ssh asus@gx10-3cd8  (or ssh asus@100.X.X.X)
+  ssh asus@gx10-XXXX  (or ssh asus@100.X.X.X)
 
 USE UI FROM LAPTOP:
-  ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-3cd8
+  ssh -L 3000:localhost:3000 -L 8000:localhost:8000 asus@gx10-XXXX
 
 DELETE HOTSPOT (cleanup):
-  nmcli con delete gx10-3cd8-Hotspot
+  nmcli con delete gx10-XXXX-Hotspot
 
 FULL GPU + MODEL GUIDE:
   learning/gx10_access_and_gpu_guide.md
