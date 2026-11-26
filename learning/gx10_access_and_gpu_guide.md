@@ -14,8 +14,8 @@
 │       │ HTTP POST to GX10 over Tailscale                                    │
 └───────┼─────────────────────────────────────────────────────────────────────┘
         │
-        ▼  Tailscale (e.g. 100.81.85.39)
-┌───────────────────────────── GX10 gx10-3cd8 ────────────────────────────────┐
+        ▼  Tailscale (e.g. <GX10_TAILSCALE_IP>)
+┌───────────────────────────── GX10 gx10-XXXX ────────────────────────────────┐
 │  Docker NIM Gemma 3n :8001  ── GPU (model download + inference)            │
 │  Docker NIM Parakeet ASR :9000  ── GPU (optional)                          │
 │  NO backend container · NO frontend on GX10                                  │
@@ -31,15 +31,15 @@ Model weights are **not** copied to your Mac. They download once on the GX10 int
 
 ---
 
-## Your unit — gx10-3cd8
+## Your unit — gx10-XXXX
 
 | Field | Value |
 |-------|-------|
-| Hotspot SSID / password | `gx10-3cd8` |
-| SSH (hotspot) | `ssh asus@gx10-3cd8.local` |
-| SSH (Tailscale) | `ssh asus@100.81.85.39` (check admin console for current IP) |
-| Username / password | `asus` / `password` |
-| Tailscale invite | https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11 |
+| Hotspot SSID / password | `gx10-XXXX` |
+| SSH (hotspot) | `ssh asus@gx10-XXXX.local` |
+| SSH (Tailscale) | `ssh asus@<GX10_TAILSCALE_IP>` (check admin console for current IP) |
+| Username / password | `asus` / (default printed on the pamphlet) |
+| Tailscale invite | (generate an invite in the Tailscale admin console; never commit invite links) |
 
 > **No pamphlet?** MAC1 sticker last 4 chars → `gx10-XXXX`.
 
@@ -47,11 +47,11 @@ Model weights are **not** copied to your Mac. They download once on the GX10 int
 
 ## Step 1 — SSH access
 
-**First time (hotspot):** connect Mac to `gx10-3cd8` → `ssh asus@gx10-3cd8.local`
+**First time (hotspot):** connect Mac to `gx10-XXXX` → `ssh asus@gx10-XXXX.local`
 
-**Daily (Tailscale):** install/connect Tailscale on Mac (same tailnet as GX10) → `ssh asus@100.81.85.39`
+**Daily (Tailscale):** install/connect Tailscale on Mac (same tailnet as GX10) → `ssh asus@<GX10_TAILSCALE_IP>`
 
-Verify: `ping -c 2 100.81.85.39` should reply before SSH.
+Verify: `ping -c 2 <GX10_TAILSCALE_IP>` should reply before SSH.
 
 See Steps 2–3 below for Tailscale setup details (hotspot pairing, team invite, venue Wi-Fi).
 
@@ -62,9 +62,9 @@ See Steps 2–3 below for Tailscale setup details (hotspot pairing, team invite,
 1. Install on Mac: https://tailscale.com/download (no `.edu` email)
 2. Menu bar → **Connected**
 3. On GX10 (once): `sudo tailscale up` → authorize URL in browser
-4. Admin → Machines → both **your Mac** and **gx10-3cd8** show Connected
+4. Admin → Machines → both **your Mac** and **gx10-XXXX** show Connected
 
-Team invite: https://login.tailscale.com/uinv/iC7hHtsfaC215vP2zbheG11
+Team invite: (generate an invite in the Tailscale admin console; never commit invite links)
 
 ---
 
@@ -156,11 +156,11 @@ cp .env.example .env
 Edit `.env` — use your GX10 Tailscale IP from admin console:
 
 ```bash
-GX10_TAILSCALE_IP=100.81.85.39
+GX10_TAILSCALE_IP=<GX10_TAILSCALE_IP>
 FORCE_CPU_SOLVER=1
-NIM_ENDPOINT=http://100.81.85.39:8001/v1
-NIM_FALLBACK=http://100.81.85.39:8001/v1
-ASR_NIM_URL=http://100.81.85.39:9000
+NIM_ENDPOINT=http://<GX10_TAILSCALE_IP>:8001/v1
+NIM_FALLBACK=http://<GX10_TAILSCALE_IP>:8001/v1
+ASR_NIM_URL=http://<GX10_TAILSCALE_IP>:9000
 NGC_API_KEY=your_ngc_key_here    # optional cloud fallback tier
 NIM_API_KEY=not-needed
 ```
@@ -168,7 +168,7 @@ NIM_API_KEY=not-needed
 **Alternative (SSH tunnel):** if `:8001` is blocked, in a separate terminal:
 
 ```bash
-ssh -L 8001:localhost:8001 -L 9000:localhost:9000 asus@100.81.85.39
+ssh -L 8001:localhost:8001 -L 9000:localhost:9000 asus@<GX10_TAILSCALE_IP>
 ```
 
 Then set `NIM_ENDPOINT=http://localhost:8001/v1` in Mac `.env`.
@@ -204,7 +204,7 @@ curl -s http://localhost:8000/api/v1/health | python3 -m json.tool
 # "rapids_mode": "cpu"
 
 # Can reach GX10 model directly
-curl -s http://100.81.85.39:8001/v1/models | head
+curl -s http://<GX10_TAILSCALE_IP>:8001/v1/models | head
 
 # App uses GPU model (not regex)
 curl -s -X POST http://localhost:8000/api/v1/caseworker/route \
@@ -222,14 +222,14 @@ UI: after routing, badge shows **`NIM`** not **`REGEX`**.
 **Mac ← GX10:**
 
 ```bash
-scp asus@100.81.85.39:~/ProjectHaven/logs/*.log ~/Desktop/
+scp asus@<GX10_TAILSCALE_IP>:~/ProjectHaven/logs/*.log ~/Desktop/
 ```
 
 **Mac → GX10:**
 
 ```bash
-scp .env asus@100.81.85.39:~/ProjectHaven/.env
-rsync -avz --exclude node_modules --exclude .vhaven ./ asus@100.81.85.39:~/ProjectHaven/
+scp .env asus@<GX10_TAILSCALE_IP>:~/ProjectHaven/.env
+rsync -avz --exclude node_modules --exclude .vhaven ./ asus@<GX10_TAILSCALE_IP>:~/ProjectHaven/
 ```
 
 ---
@@ -252,7 +252,7 @@ Requires monitor on GX10. After pairing venue Wi-Fi:
 
 ```bash
 nmcli con show
-nmcli con delete gx10-3cd8-Hotspot
+nmcli con delete gx10-XXXX-Hotspot
 ```
 
 ---
@@ -266,7 +266,7 @@ GX10 (models only):
   curl http://localhost:8001/v1/models && nvidia-smi
 
 MAC (backend + frontend):
-  .env → NIM_ENDPOINT=http://100.81.85.39:8001/v1, FORCE_CPU_SOLVER=1
+  .env → NIM_ENDPOINT=http://<GX10_TAILSCALE_IP>:8001/v1, FORCE_CPU_SOLVER=1
   uvicorn backend.main:app --port 8000 --reload
   cd frontend && npm run dev
 
